@@ -767,6 +767,9 @@ function saveRecord(record) {
   addCandidate("shops", record.shop);
   addCandidate("machines", record.machine);
 
+  addCandidate("shops", record.shop);
+  addCandidate("machines", record.machine);
+
   const index = state.records.findIndex((item) => item.id === record.id);
   if (index >= 0) {
     state.records[index] = { ...state.records[index], ...record };
