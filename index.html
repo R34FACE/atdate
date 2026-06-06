@@ -38,7 +38,13 @@
               <p class="eyebrow">Next Target</p>
               <h2 id="recommendTitle">次回特日のおすすめ台</h2>
             </div>
-            <label class="compact-label">
+          </div>
+          <div class="filter-row recommendation-filters" aria-label="おすすめ台絞り込み">
+            <label>
+              店舗名
+              <select id="recommendShopFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
               次回特日タグ
               <select id="recommendTagInput">
                 <option value="ゾロ目日">ゾロ目日</option>
@@ -48,6 +54,10 @@
                 <option value="その他">その他</option>
               </select>
             </label>
+            <label>
+              機種名
+              <select id="recommendMachineFilter"><option value="">すべて</option></select>
+            </label>
           </div>
           <div class="table-wrap">
             <table class="recommend-table">
@@ -56,6 +66,7 @@
                   <th>店舗名</th>
                   <th>機種名</th>
                   <th>台番号</th>
+                  <th>登録回数</th>
                   <th>勝率</th>
                   <th>平均差枚</th>
                   <th>総差枚</th>
@@ -78,8 +89,11 @@
             </div>
             <div class="tabs" role="tablist" aria-label="集計切替">
               <button class="tab active" type="button" data-summary="tag">特日タグ別集計</button>
+              <button class="tab" type="button" data-summary="shop">店舗別集計</button>
               <button class="tab" type="button" data-summary="machine">機種別集計</button>
               <button class="tab" type="button" data-summary="number">台番号別集計</button>
+              <button class="tab" type="button" data-summary="tail">末尾別集計</button>
+              <button class="tab" type="button" data-summary="range">番号帯別集計</button>
             </div>
           </div>
           <div class="filter-row" aria-label="集計絞り込み">
@@ -94,6 +108,14 @@
             <label>
               機種名
               <select id="summaryMachineFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              開始日
+              <input id="summaryStartDateFilter" type="date" />
+            </label>
+            <label>
+              終了日
+              <input id="summaryEndDateFilter" type="date" />
             </label>
           </div>
           <div class="table-wrap">
@@ -112,6 +134,14 @@
               <p class="eyebrow">Records</p>
               <h2 id="recordsTitle">登録データ一覧</h2>
             </div>
+            <div class="button-row records-actions">
+              <button class="ghost-button" id="recordsExportCsvButton" type="button">CSV出力</button>
+              <label class="ghost-button file-action">
+                CSV取込
+                <input id="recordsImportCsvInput" type="file" accept=".csv,text/csv" />
+              </label>
+              <button class="danger-button" id="clearAllRecordsButton" type="button">全削除</button>
+            </div>
           </div>
           <div class="filter-row" aria-label="登録データ絞り込み">
             <label>
@@ -125,6 +155,10 @@
             <label>
               機種名
               <select id="recordsMachineFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              台番号
+              <input id="recordsNumberFilter" type="search" inputmode="numeric" placeholder="例：123" />
             </label>
           </div>
           <div class="table-wrap">

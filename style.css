@@ -587,3 +587,49 @@ td {
     text-align: center;
   }
 }
+
+.records-actions {
+  justify-content: flex-end;
+}
+
+.recommendation-filters {
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.summary-panel .tabs {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+
+.summary-panel .tab {
+  flex: 0 0 auto;
+}
+
+.medals-cell,
+.strong-rate {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.recommend-table {
+  min-width: 1080px;
+}
+
+@media (max-width: 680px) {
+  .records-actions {
+    justify-content: stretch;
+  }
+
+  .records-actions .file-action,
+  .records-actions .ghost-button,
+  .records-actions .danger-button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .recommendation-filters {
+    grid-template-columns: 1fr;
+  }
+}

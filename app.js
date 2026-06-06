@@ -33,15 +33,23 @@ const elements = {
   summaryShopFilter: $("summaryShopFilter"),
   summaryTagFilter: $("summaryTagFilter"),
   summaryMachineFilter: $("summaryMachineFilter"),
+  summaryStartDateFilter: $("summaryStartDateFilter"),
+  summaryEndDateFilter: $("summaryEndDateFilter"),
   recordsShopFilter: $("recordsShopFilter"),
   recordsTagFilter: $("recordsTagFilter"),
   recordsMachineFilter: $("recordsMachineFilter"),
+  recordsNumberFilter: $("recordsNumberFilter"),
+  recommendShopFilter: $("recommendShopFilter"),
+  recommendMachineFilter: $("recommendMachineFilter"),
   shopCandidates: $("shopCandidates"),
   machineCandidates: $("machineCandidates"),
   recommendTagInput: $("recommendTagInput"),
   recommendationList: $("recommendationList"),
   exportCsvButton: $("exportCsvButton"),
   importCsvInput: $("importCsvInput"),
+  recordsExportCsvButton: $("recordsExportCsvButton"),
+  recordsImportCsvInput: $("recordsImportCsvInput"),
+  clearAllRecordsButton: $("clearAllRecordsButton"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -67,15 +75,27 @@ function bindEvents() {
       resetEditor();
     }
   });
-  [elements.summaryShopFilter, elements.summaryTagFilter, elements.summaryMachineFilter].forEach((filter) => {
+  [
+    elements.summaryShopFilter,
+    elements.summaryTagFilter,
+    elements.summaryMachineFilter,
+    elements.summaryStartDateFilter,
+    elements.summaryEndDateFilter,
+  ].forEach((filter) => {
     filter.addEventListener("change", renderSummary);
   });
   [elements.recordsShopFilter, elements.recordsTagFilter, elements.recordsMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecords);
   });
-  elements.recommendTagInput.addEventListener("change", renderRecommendations);
+  elements.recordsNumberFilter.addEventListener("input", renderRecords);
+  [elements.recommendShopFilter, elements.recommendTagInput, elements.recommendMachineFilter].forEach((filter) => {
+    filter.addEventListener("change", renderRecommendations);
+  });
   elements.exportCsvButton.addEventListener("click", exportCsv);
   elements.importCsvInput.addEventListener("change", importCsv);
+  elements.recordsExportCsvButton.addEventListener("click", exportCsv);
+  elements.recordsImportCsvInput.addEventListener("change", importCsv);
+  elements.clearAllRecordsButton.addEventListener("click", clearAllRecords);
   document.querySelectorAll(".menu-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
   });
@@ -158,6 +178,8 @@ function renderCandidateControls() {
   renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.recordsMachineFilter, state.candidates.machines, "すべて");
+  renderSelectOptions(elements.recommendShopFilter, state.candidates.shops, "すべて");
+  renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.summaryTagFilter, TAGS, "すべて");
   renderSelectOptions(elements.recordsTagFilter, TAGS, "すべて");
 }
@@ -213,10 +235,9 @@ async function handleScan(event) {
   syncConfirmFromScan();
   setStatus("読取中...");
 
-  const [machineNumber, estimatedMedals] = await Promise.all([
-    readMachineNumber(state.selectedImage),
-    estimateMedalsFromGraph(state.selectedImage),
-  ]);
+  const scanResult = await analyzeAtGraphImage(state.selectedImage);
+  const machineNumber = scanResult.number || (await readMachineNumber(state.selectedImage));
+  const estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : await estimateMedalsFromGraph(state.selectedImage);
 
   const fallbackNumber = $("confirmNumberInput").value || "";
   const normalizedNumber = machineNumber || fallbackNumber;
@@ -248,6 +269,206 @@ async function readMachineNumber(imageData) {
   } catch {
     return "";
   }
+}
+
+async function analyzeAtGraphImage(imageData) {
+  try {
+    const sourceCanvas = await imageDataToCanvas(imageData, 1100);
+    const graphRect = detectAtGraphRegion(sourceCanvas) || {
+      left: Math.round(sourceCanvas.width * 0.08),
+      top: Math.round(sourceCanvas.height * 0.18),
+      right: Math.round(sourceCanvas.width * 0.95),
+      bottom: Math.round(sourceCanvas.height * 0.88),
+    };
+    const [number, medals] = await Promise.all([
+      recognizeAtGraphUnitNumber(sourceCanvas, graphRect),
+      estimateAtGraphMedals(sourceCanvas, graphRect),
+    ]);
+    return { number, medals };
+  } catch {
+    return { number: "", medals: Number.NaN };
+  }
+}
+
+function imageDataToCanvas(imageData, maxWidth = 1100) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      const scale = Math.min(1, maxWidth / image.width);
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas);
+    };
+    image.onerror = reject;
+    image.src = imageData;
+  });
+}
+
+function detectAtGraphRegion(canvas) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const { width, height } = canvas;
+  const imageData = ctx.getImageData(0, 0, width, height).data;
+  let left = width;
+  let right = 0;
+  let top = height;
+  let bottom = 0;
+  let count = 0;
+
+  for (let y = Math.round(height * 0.10); y < Math.round(height * 0.92); y += 1) {
+    for (let x = Math.round(width * 0.05); x < Math.round(width * 0.98); x += 1) {
+      const index = (y * width + x) * 4;
+      const r = imageData[index];
+      const g = imageData[index + 1];
+      const b = imageData[index + 2];
+      if (isAtGraphYellow(r, g, b) || isAtGraphLineColor(r, g, b)) {
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+        count += 1;
+      }
+    }
+  }
+
+  if (count < 80 || right <= left || bottom <= top) return null;
+  const padX = Math.max(12, Math.round(width * 0.025));
+  const padY = Math.max(12, Math.round(height * 0.035));
+  return {
+    left: Math.max(0, left - padX),
+    right: Math.min(width - 1, right + padX),
+    top: Math.max(0, top - padY),
+    bottom: Math.min(height - 1, bottom + padY),
+  };
+}
+
+async function recognizeAtGraphUnitNumber(sourceCanvas, graphRect) {
+  if (!window.Tesseract) return "";
+  const titleHeight = Math.max(42, Math.round(sourceCanvas.height * 0.12));
+  const rect = {
+    left: Math.max(0, graphRect.left - 8),
+    right: Math.min(sourceCanvas.width - 1, graphRect.right + 8),
+    top: Math.max(0, graphRect.top - titleHeight),
+    bottom: Math.max(0, graphRect.top - 1),
+  };
+  if (rect.bottom <= rect.top) return "";
+  const cropped = cropCanvas(sourceCanvas, rect, { padding: 10, fill: "white" });
+  const enhanced = enhanceCanvasForOcr(cropped);
+  try {
+    const result = await window.Tesseract.recognize(enhanced, "eng", {
+      tessedit_pageseg_mode: "6",
+      tessedit_char_whitelist: "[]0123456789台番No.- ",
+    });
+    const text = result.data.text || "";
+    const candidates = text.match(/\d{2,5}/g) || [];
+    return candidates.sort((a, b) => scoreMachineNumber(b) - scoreMachineNumber(a))[0] || "";
+  } catch {
+    return "";
+  }
+}
+
+function estimateAtGraphMedals(sourceCanvas, graphRect) {
+  const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "white" });
+  const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
+  const { width, height } = graphCanvas;
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const points = collectAtGraphLinePoints(imageData);
+  if (!points.length) return Number.NaN;
+
+  const endPoint = pickAtGraphEndpoint(points, width);
+  const zeroLineY = detectAtGraphZeroLine(imageData) ?? height * 0.5;
+  const graphTop = Math.max(0, height * 0.08);
+  const graphBottom = Math.min(height - 1, height * 0.92);
+  const span = Math.max(1, Math.max(zeroLineY - graphTop, graphBottom - zeroLineY));
+  return Math.round(((zeroLineY - endPoint.y) / span) * 5000 / 50) * 50;
+}
+
+function collectAtGraphLinePoints(imageData) {
+  const { data, width, height } = imageData;
+  const points = [];
+  for (let y = Math.round(height * 0.04); y < Math.round(height * 0.96); y += 1) {
+    for (let x = Math.round(width * 0.03); x < Math.round(width * 0.98); x += 1) {
+      const index = (y * width + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      if (isAtGraphYellow(r, g, b) || isAtGraphLineColor(r, g, b)) points.push({ x, y });
+    }
+  }
+  return points;
+}
+
+function pickAtGraphEndpoint(points, width) {
+  const maxX = Math.max(...points.map((point) => point.x));
+  const tail = points.filter((point) => point.x >= maxX - Math.max(10, width * 0.03));
+  const averageY = tail.reduce((sum, point) => sum + point.y, 0) / tail.length;
+  return { x: maxX, y: averageY };
+}
+
+function detectAtGraphZeroLine(imageData) {
+  const { data, width, height } = imageData;
+  let best = { y: null, count: 0 };
+  for (let y = Math.round(height * 0.25); y < Math.round(height * 0.75); y += 1) {
+    let count = 0;
+    for (let x = Math.round(width * 0.05); x < Math.round(width * 0.95); x += 1) {
+      const index = (y * width + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const gray = Math.max(r, g, b) - Math.min(r, g, b) < 18;
+      if (gray && r >= 95 && r <= 205 && g >= 95 && g <= 205 && b >= 95 && b <= 205) count += 1;
+    }
+    if (count > best.count) best = { y, count };
+  }
+  return best.count > width * 0.18 ? best.y : null;
+}
+
+function isAtGraphYellow(r, g, b) {
+  return r >= 170 && g >= 125 && g <= 235 && b <= 110 && r - b >= 80;
+}
+
+function isAtGraphLineColor(r, g, b) {
+  const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+  const isColoredLine = saturation > 38 && (r > 105 || g > 105 || b > 105);
+  const isDarkLine = r < 88 && g < 105 && b < 120;
+  return isColoredLine || isDarkLine;
+}
+
+function cropCanvas(source, rect, options = {}) {
+  const padding = options.padding || 0;
+  const width = Math.max(1, Math.round(rect.right - rect.left + 1 + padding * 2));
+  const height = Math.max(1, Math.round(rect.bottom - rect.top + 1 + padding * 2));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = options.fill || "transparent";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(source, rect.left, rect.top, rect.right - rect.left + 1, rect.bottom - rect.top + 1, padding, padding, width - padding * 2, height - padding * 2);
+  return canvas;
+}
+
+function enhanceCanvasForOcr(source) {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    const r = imageData.data[i];
+    const g = imageData.data[i + 1];
+    const b = imageData.data[i + 2];
+    const luminance = r * 0.299 + g * 0.587 + b * 0.114;
+    const value = luminance < 170 ? 0 : 255;
+    imageData.data[i] = value;
+    imageData.data[i + 1] = value;
+    imageData.data[i + 2] = value;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
 }
 
 function scoreMachineNumber(value) {
@@ -303,18 +524,12 @@ function findGraphEndPoint(data, width, height) {
       const b = data[index + 2];
       const alpha = data[index + 3];
       if (alpha < 80) continue;
-      const saturation = Math.max(r, g, b) - Math.min(r, g, b);
-      const isColoredLine = saturation > 38 && (r > 110 || g > 110 || b > 110);
-      const isDarkLine = r < 90 && g < 110 && b < 125;
-      if (isColoredLine || isDarkLine) points.push({ x, y });
+      if (isAtGraphLineColor(r, g, b) || isAtGraphYellow(r, g, b)) points.push({ x, y });
     }
   }
 
   if (!points.length) return null;
-  const maxX = Math.max(...points.map((point) => point.x));
-  const tail = points.filter((point) => point.x >= maxX - Math.max(8, width * 0.025));
-  const averageY = tail.reduce((sum, point) => sum + point.y, 0) / tail.length;
-  return { x: maxX, y: averageY };
+  return pickAtGraphEndpoint(points, width);
 }
 
 function syncConfirmFromScan() {
@@ -336,7 +551,7 @@ function handleSaveRecord(event) {
     machine: $("confirmMachineInput").value.trim(),
     number: $("confirmNumberInput").value.trim(),
     medals: Number.isFinite(medalValue) ? Math.round(medalValue) : 0,
-    result: medalValue >= 0 ? "勝ち" : "負け",
+    result: medalValue > 0 ? "勝ち" : "負け",
     image: state.selectedImage,
     updatedAt: new Date().toISOString(),
   };
@@ -411,9 +626,9 @@ function updateWinLoseBanner() {
     elements.winLoseBanner.textContent = "勝敗は差枚から自動判定されます";
     return;
   }
-  const result = medals >= 0 ? "勝ち" : "負け";
+  const result = medals > 0 ? "勝ち" : "負け";
   elements.winLoseBanner.textContent = `${formatMedals(medals)} / ${result}`;
-  elements.winLoseBanner.classList.add(medals >= 0 ? "win" : "lose");
+  elements.winLoseBanner.classList.add(medals > 0 ? "win" : "lose");
 }
 
 function renderAll() {
@@ -428,6 +643,7 @@ function renderRecords() {
     shop: elements.recordsShopFilter.value,
     tag: elements.recordsTagFilter.value,
     machine: elements.recordsMachineFilter.value,
+    number: elements.recordsNumberFilter.value.trim(),
   });
 
   if (!filtered.length) {
@@ -444,8 +660,8 @@ function renderRecords() {
           <td>${escapeHtml(record.tag)}</td>
           <td>${escapeHtml(record.machine)}</td>
           <td class="number-cell">${escapeHtml(record.number)}</td>
-          <td class="number-cell">${formatMedals(record.medals)}</td>
-          <td class="${record.medals >= 0 ? "win-text" : "lose-text"}">${record.medals >= 0 ? "勝ち" : "負け"}</td>
+          <td class="number-cell medals-cell ${record.medals > 0 ? "win-text" : "lose-text"}">${formatMedals(record.medals)}</td>
+          <td class="${record.medals > 0 ? "win-text" : "lose-text"}">${record.medals > 0 ? "勝ち" : "負け"}</td>
           <td>
             <div class="row-actions">
               <button class="small-button" type="button" data-edit="${record.id}">編集</button>
@@ -473,25 +689,33 @@ function renderSummary() {
     shop: elements.summaryShopFilter.value,
     tag: elements.summaryTagFilter.value,
     machine: elements.summaryMachineFilter.value,
+    startDate: elements.summaryStartDateFilter.value,
+    endDate: elements.summaryEndDateFilter.value,
   });
   const labels = {
-    tag: ["特日タグ", "登録台数"],
-    machine: ["機種名", "登録台数"],
-    number: ["台番号", "登録回数"],
+    tag: "特日タグ",
+    shop: "店舗名",
+    machine: "機種名",
+    number: "台番号",
+    tail: "末尾",
+    range: "番号帯",
   };
   elements.summaryHead.innerHTML = `
     <tr>
-      <th>${labels[mode][0]}</th>
+      <th>${labels[mode]}</th>
+      <th>登録台数</th>
+      <th>プラス台数</th>
       <th>勝率</th>
       <th>平均差枚</th>
       <th>総差枚</th>
-      <th>${labels[mode][1]}</th>
+      <th>最大差枚</th>
+      <th>最小差枚</th>
     </tr>
   `;
 
   const groups = groupRecords(mode, summaryRecords);
   if (!groups.length) {
-    elements.summaryBody.innerHTML = `<tr><td class="empty-row" colspan="5">集計できるデータがありません</td></tr>`;
+    elements.summaryBody.innerHTML = `<tr><td class="empty-row" colspan="8">集計できるデータがありません</td></tr>`;
     return;
   }
 
@@ -500,10 +724,13 @@ function renderSummary() {
       (group) => `
         <tr>
           <td>${escapeHtml(group.key)}</td>
-          <td class="number-cell">${Math.round(group.winRate * 100)}%</td>
-          <td class="number-cell">${formatMedals(group.average)}</td>
-          <td class="number-cell">${formatMedals(group.total)}</td>
           <td class="number-cell">${group.count}</td>
+          <td class="number-cell win-text">${group.positives}</td>
+          <td class="number-cell strong-rate">${Math.round(group.winRate * 100)}%</td>
+          <td class="number-cell medals-cell ${group.average > 0 ? "win-text" : "lose-text"}">${formatMedals(group.average)}</td>
+          <td class="number-cell medals-cell ${group.total > 0 ? "win-text" : "lose-text"}">${formatMedals(group.total)}</td>
+          <td class="number-cell medals-cell win-text">${formatMedals(group.max)}</td>
+          <td class="number-cell medals-cell lose-text">${formatMedals(group.min)}</td>
         </tr>
       `
     )
@@ -511,16 +738,19 @@ function renderSummary() {
 }
 
 function renderRecommendations() {
-  const tag = elements.recommendTagInput.value;
-  const byNumber = state.records.filter((record) => record.tag === tag);
-  const groups = summarizeBy(byNumber, (record) => `${record.shop}|||${record.machine}|||${record.number}`);
+  const filtered = applyFilters(state.records, {
+    shop: elements.recommendShopFilter.value,
+    tag: elements.recommendTagInput.value,
+    machine: elements.recommendMachineFilter.value,
+  });
+  const groups = summarizeBy(filtered, (record) => `${record.shop}|||${record.machine}|||${record.number}`);
   const recommendations = groups
     .map((group) => ({ ...group, grade: gradeGroup(group) }))
-    .sort((a, b) => gradeRank(a.grade) - gradeRank(b.grade) || b.average - a.average || b.winRate - a.winRate)
-    .slice(0, 12);
+    .sort((a, b) => gradeRank(a.grade) - gradeRank(b.grade) || b.average - a.average || b.winRate - a.winRate || b.count - a.count)
+    .slice(0, 20);
 
   if (!recommendations.length) {
-    elements.recommendationList.innerHTML = `<tr><td class="empty-row" colspan="8">選択中の特日タグには、まだ登録データがありません。</td></tr>`;
+    elements.recommendationList.innerHTML = `<tr><td class="empty-row" colspan="9">条件に一致する登録データがありません。</td></tr>`;
     return;
   }
 
@@ -532,9 +762,10 @@ function renderRecommendations() {
           <td>${escapeHtml(shop)}</td>
           <td>${escapeHtml(machine)}</td>
           <td class="number-cell">${escapeHtml(number)}</td>
-          <td class="number-cell">${Math.round(item.winRate * 100)}%</td>
-          <td class="number-cell">${formatMedals(item.average)}</td>
-          <td class="number-cell">${formatMedals(item.total)}</td>
+          <td class="number-cell">${item.count}</td>
+          <td class="number-cell strong-rate">${Math.round(item.winRate * 100)}%</td>
+          <td class="number-cell medals-cell ${item.average > 0 ? "win-text" : "lose-text"}">${formatMedals(item.average)}</td>
+          <td class="number-cell medals-cell ${item.total > 0 ? "win-text" : "lose-text"}">${formatMedals(item.total)}</td>
           <td><span class="grade grade-${item.grade.toLowerCase()}">${item.grade}</span></td>
           <td>${escapeHtml(recommendationReason(item))}</td>
         </tr>
@@ -544,18 +775,24 @@ function renderRecommendations() {
 }
 
 function recommendationReason(item) {
-  if (item.grade === "A") return `勝率${Math.round(item.winRate * 100)}%かつ平均差枚がプラスで、${item.count}回の実績があります。`;
-  if (item.grade === "B") return `勝率または平均差枚のどちらかが良好で、候補として期待できます。`;
-  return item.count < 2 ? "実績は少なめですが比較候補として表示しています。" : "上位候補と比べると成績は控えめです。";
+  const rate = Math.round(item.winRate * 100);
+  if (item.count < 2) return `データ不足（登録${item.count}回）。AT機は荒れやすいため、1回だけの大勝ちは参考扱いです。`;
+  if (item.grade === "A" && item.count >= 3) return `登録${item.count}回、勝率${rate}%、平均差枚がプラスで安定感があります。`;
+  if (item.grade === "A") return `登録${item.count}回で平均差枚+500枚以上。回数は少なめなので手動確認推奨です。`;
+  if (item.grade === "B") return `A条件には未達ですが、勝率${rate}%または平均差枚プラスで候補に残せます。`;
+  return item.average < 0 ? "平均差枚がマイナス、または勝率が低いためC評価です。" : "データ不足または上位条件に届かないためC評価です。";
 }
 
 function groupRecords(mode, records = state.records) {
   const selectors = {
     tag: (record) => record.tag,
+    shop: (record) => record.shop,
     machine: (record) => record.machine,
     number: (record) => record.number,
+    tail: (record) => numberTail(record.number),
+    range: (record) => numberRange(record.number),
   };
-  return summarizeBy(records, selectors[mode]).sort((a, b) => b.average - a.average || b.winRate - a.winRate);
+  return summarizeBy(records, selectors[mode] || selectors.tag).sort((a, b) => b.average - a.average || b.winRate - a.winRate || b.count - a.count);
 }
 
 function applyFilters(records, filters) {
@@ -563,6 +800,9 @@ function applyFilters(records, filters) {
     if (filters.shop && record.shop !== filters.shop) return false;
     if (filters.tag && record.tag !== filters.tag) return false;
     if (filters.machine && record.machine !== filters.machine) return false;
+    if (filters.number && !String(record.number || "").includes(filters.number)) return false;
+    if (filters.startDate && String(record.date || "") < filters.startDate) return false;
+    if (filters.endDate && String(record.date || "") > filters.endDate) return false;
     return true;
   });
 }
@@ -571,28 +811,56 @@ function summarizeBy(records, selector) {
   const map = new Map();
   records.forEach((record) => {
     const key = selector(record) || "未設定";
-    const item = map.get(key) || { key, count: 0, wins: 0, total: 0 };
+    const medals = Number(record.medals) || 0;
+    const item = map.get(key) || { key, count: 0, positives: 0, total: 0, max: medals, min: medals };
     item.count += 1;
-    item.wins += Number(record.medals) >= 0 ? 1 : 0;
-    item.total += Number(record.medals) || 0;
+    item.positives += medals > 0 ? 1 : 0;
+    item.total += medals;
+    item.max = Math.max(item.max, medals);
+    item.min = Math.min(item.min, medals);
     map.set(key, item);
   });
   return Array.from(map.values()).map((item) => ({
     ...item,
-    winRate: item.count ? item.wins / item.count : 0,
+    wins: item.positives,
+    winRate: item.count ? item.positives / item.count : 0,
     average: item.count ? Math.round(item.total / item.count) : 0,
   }));
 }
 
 function gradeGroup(group) {
   if (group.count < 2) return "C";
-  if (group.winRate >= 0.6 && group.average > 0) return "A";
-  if (group.winRate >= 0.6 || group.average > 0) return "B";
+  if ((group.count >= 3 && group.winRate >= 0.5 && group.average > 0) || group.average >= 500) return "A";
+  if (group.average > 0 || group.winRate >= 0.5) return "B";
   return "C";
+}
+
+function numberTail(value) {
+  const digits = String(value || "").match(/\d/g);
+  return digits?.length ? `${digits[digits.length - 1]}番末尾` : "未設定";
+}
+
+function numberRange(value) {
+  const number = Number(String(value || "").replace(/\D/g, ""));
+  if (!Number.isFinite(number) || number <= 0) return "未設定";
+  if (number < 100) return "1〜99番台";
+  const start = Math.floor(number / 100) * 100;
+  return `${start}〜${start + 99}番台`;
 }
 
 function gradeRank(grade) {
   return { A: 1, B: 2, C: 3 }[grade] || 9;
+}
+
+function clearAllRecords() {
+  if (!state.records.length) {
+    alert("削除する登録データがありません。");
+    return;
+  }
+  if (!confirm(`登録データ${state.records.length}件をすべて削除しますか？この操作は元に戻せません。`)) return;
+  state.records = [];
+  saveRecords();
+  renderAll();
 }
 
 function exportCsv() {
@@ -604,7 +872,7 @@ function exportCsv() {
     record.machine,
     record.number,
     record.medals,
-    record.medals >= 0 ? "勝ち" : "負け",
+    record.medals > 0 ? "勝ち" : "負け",
     record.image || "",
   ]);
   const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
@@ -633,7 +901,7 @@ function importCsv(event) {
         machine: row[3] || "",
         number: row[4] || "",
         medals,
-        result: medals >= 0 ? "勝ち" : "負け",
+        result: medals > 0 ? "勝ち" : "負け",
         image: row[7] || "",
         updatedAt: new Date().toISOString(),
       };
