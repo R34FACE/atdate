@@ -17,6 +17,7 @@ const yen = new Intl.NumberFormat("ja-JP");
 
 const elements = {
   scanForm: $("scanForm"),
+  scanButton: $("scanButton"),
   recordForm: $("recordForm"),
   imageInput: $("imageInput"),
   previewImage: $("previewImage"),
@@ -68,7 +69,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function bindEvents() {
   elements.imageInput.addEventListener("change", handleImageSelect);
-  elements.scanForm.addEventListener("submit", handleScan);
+  elements.scanButton.addEventListener("click", handleScan);
+  elements.scanForm.addEventListener("submit", (event) => event.preventDefault());
   elements.recordForm.addEventListener("submit", handleSaveRecord);
   $("confirmMedalsInput").addEventListener("input", updateWinLoseBanner);
   elements.clearImageButton.addEventListener("click", clearImage);
@@ -247,33 +249,55 @@ function readFileAsDataUrl(file) {
 }
 
 async function handleScan(event) {
-  event.preventDefault();
-  const images = state.selectedImages.length ? state.selectedImages : state.selectedImage ? [state.selectedImage] : [];
-  if (!images.length) {
+  event?.preventDefault?.();
+
+  try {
+    const selectedFiles = Array.from(elements.imageInput.files || []).filter((file) => file.type.startsWith("image/"));
+
+    if (!state.selectedImages.length && selectedFiles.length) {
+      state.selectedImages = await Promise.all(selectedFiles.map(readFileAsDataUrl));
+      state.selectedImage = state.selectedImages[0] || "";
+      if (state.selectedImage) {
+        elements.previewImage.src = state.selectedImage;
+        elements.previewImage.parentElement.classList.add("has-image");
+      }
+    }
+
+    const images = state.selectedImages.length ? state.selectedImages : state.selectedImage ? [state.selectedImage] : [];
+    if (!images.length) {
+      setStatus("グラフ画像を選択してください");
+      alert("グラフ画像を選択してください。");
+      return;
+    }
+
     syncConfirmFromScan();
+    state.batchResults = [];
     hideBatchResults();
-    setStatus("画像なしで確認欄へ反映");
-    return;
+    setStatus(`読取中... 0/${images.length}`);
+
+    const results = [];
+    for (const [index, image] of images.entries()) {
+      try {
+        setStatus(`読取中... ${index + 1}/${images.length}`);
+        const scan = await scanSingleImage(image);
+        results.push(createBatchResult(image, scan, index));
+      } catch (error) {
+        console.error(`${index + 1}枚目の読み取り失敗`, error);
+        results.push(createBatchResult(image, { number: "", medals: 0 }, index));
+      }
+    }
+
+    const first = results[0];
+    fillConfirmFromScanResult(first);
+    state.batchResults = results;
+    renderBatchResults();
+    updateWinLoseBanner();
+    setStatus(images.length > 1 ? `${images.length}件の結果を確認してください` : "確認してください");
+  } catch (error) {
+    console.error("画像読み取りエラー:", error);
+    setStatus("読み取りエラーが発生しました。コンソールを確認してください。");
+    alert("画像読み取り中にエラーが発生しました。画像形式やコードを確認してください。");
   }
-
-  syncConfirmFromScan();
-  state.batchResults = [];
-  hideBatchResults();
-  setStatus(`読取中... 0/${images.length}`);
-
-  const results = [];
-  for (const [index, image] of images.entries()) {
-    setStatus(`読取中... ${index + 1}/${images.length}`);
-    const scan = await scanSingleImage(image);
-    results.push(createBatchResult(image, scan, index));
-  }
-
-  const first = results[0];
-  fillConfirmFromScanResult(first);
-  state.batchResults = results;
-  renderBatchResults();
-  updateWinLoseBanner();
-  setStatus(images.length > 1 ? `${images.length}件の結果を確認してください` : "確認してください");
 }
 
 async function scanSingleImage(imageData) {
@@ -764,9 +788,6 @@ function validateRecord(record) {
 }
 
 function saveRecord(record) {
-  addCandidate("shops", record.shop);
-  addCandidate("machines", record.machine);
-
   addCandidate("shops", record.shop);
   addCandidate("machines", record.machine);
 
