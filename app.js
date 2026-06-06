@@ -1,10 +1,13 @@
 const STORAGE_KEY = "atSlotSpecialDayRecords";
+const CANDIDATE_STORAGE_KEY = "atSlotNameCandidates";
 const TAGS = ["ゾロ目日", "7の日", "周年", "月イチ", "その他"];
 
 const state = {
   records: loadRecords(),
   selectedImage: "",
   summaryMode: "tag",
+  activeView: "recommend",
+  candidates: loadCandidates(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +30,14 @@ const elements = {
   recordsBody: $("recordsBody"),
   summaryHead: $("summaryHead"),
   summaryBody: $("summaryBody"),
-  searchInput: $("searchInput"),
+  summaryShopFilter: $("summaryShopFilter"),
+  summaryTagFilter: $("summaryTagFilter"),
+  summaryMachineFilter: $("summaryMachineFilter"),
+  recordsShopFilter: $("recordsShopFilter"),
+  recordsTagFilter: $("recordsTagFilter"),
+  recordsMachineFilter: $("recordsMachineFilter"),
+  shopCandidates: $("shopCandidates"),
+  machineCandidates: $("machineCandidates"),
   recommendTagInput: $("recommendTagInput"),
   recommendationList: $("recommendationList"),
   exportCsvButton: $("exportCsvButton"),
@@ -37,7 +47,9 @@ const elements = {
 document.addEventListener("DOMContentLoaded", () => {
   $("dateInput").valueAsDate = new Date();
   syncConfirmFromScan();
+  seedCandidatesFromRecords();
   bindEvents();
+  renderCandidateControls();
   renderAll();
 });
 
@@ -55,10 +67,18 @@ function bindEvents() {
       resetEditor();
     }
   });
-  elements.searchInput.addEventListener("input", renderRecords);
+  [elements.summaryShopFilter, elements.summaryTagFilter, elements.summaryMachineFilter].forEach((filter) => {
+    filter.addEventListener("change", renderSummary);
+  });
+  [elements.recordsShopFilter, elements.recordsTagFilter, elements.recordsMachineFilter].forEach((filter) => {
+    filter.addEventListener("change", renderRecords);
+  });
   elements.recommendTagInput.addEventListener("change", renderRecommendations);
   elements.exportCsvButton.addEventListener("click", exportCsv);
   elements.importCsvInput.addEventListener("change", importCsv);
+  document.querySelectorAll(".menu-tab").forEach((tab) => {
+    tab.addEventListener("click", () => switchView(tab.dataset.view));
+  });
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       state.summaryMode = tab.dataset.summary;
@@ -81,6 +101,93 @@ function saveRecords() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.records));
 }
 
+function loadCandidates() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CANDIDATE_STORAGE_KEY) || "{}");
+    return {
+      shops: uniqueSorted(parsed.shops || []),
+      machines: uniqueSorted(parsed.machines || []),
+    };
+  } catch {
+    return { shops: [], machines: [] };
+  }
+}
+
+function saveCandidates() {
+  localStorage.setItem(CANDIDATE_STORAGE_KEY, JSON.stringify(state.candidates));
+}
+
+function seedCandidatesFromRecords() {
+  state.records.forEach((record) => {
+    addCandidate("shops", record.shop, false);
+    addCandidate("machines", record.machine, false);
+  });
+  saveCandidates();
+}
+
+function addCandidate(type, value, shouldRender = true) {
+  const name = String(value || "").trim();
+  if (!name) return false;
+  const normalized = name.toLocaleLowerCase("ja-JP");
+  const list = state.candidates[type] || [];
+  if (list.some((item) => item.toLocaleLowerCase("ja-JP") === normalized)) return false;
+  state.candidates[type] = uniqueSorted([...list, name]);
+  saveCandidates();
+  if (shouldRender) renderCandidateControls();
+  return true;
+}
+
+function uniqueSorted(values) {
+  const seen = new Set();
+  return values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLocaleLowerCase("ja-JP");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b, "ja-JP"));
+}
+
+function renderCandidateControls() {
+  renderDatalist(elements.shopCandidates, state.candidates.shops);
+  renderDatalist(elements.machineCandidates, state.candidates.machines);
+  renderSelectOptions(elements.summaryShopFilter, state.candidates.shops, "すべて");
+  renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
+  renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
+  renderSelectOptions(elements.recordsMachineFilter, state.candidates.machines, "すべて");
+  renderSelectOptions(elements.summaryTagFilter, TAGS, "すべて");
+  renderSelectOptions(elements.recordsTagFilter, TAGS, "すべて");
+}
+
+function renderDatalist(element, values) {
+  element.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
+}
+
+function renderSelectOptions(select, values, placeholder) {
+  const current = select.value;
+  select.innerHTML = `<option value="">${placeholder}</option>${values
+    .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+    .join("")}`;
+  select.value = values.includes(current) ? current : "";
+}
+
+function switchView(view) {
+  state.activeView = view;
+  document.querySelectorAll(".menu-tab").forEach((tab) => {
+    const isActive = tab.dataset.view === view;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", String(isActive));
+  });
+  document.querySelectorAll("[data-view-panel]").forEach((panel) => {
+    const isActive = panel.dataset.viewPanel === view;
+    panel.classList.toggle("active", isActive);
+    panel.hidden = !isActive;
+  });
+}
+
 function handleImageSelect(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -98,7 +205,8 @@ function handleImageSelect(event) {
 async function handleScan(event) {
   event.preventDefault();
   if (!state.selectedImage) {
-    setStatus("画像未選択");
+    syncConfirmFromScan();
+    setStatus("画像なしで確認欄へ反映");
     return;
   }
 
@@ -233,6 +341,9 @@ function handleSaveRecord(event) {
     updatedAt: new Date().toISOString(),
   };
 
+  addCandidate("shops", record.shop);
+  addCandidate("machines", record.machine);
+
   const index = state.records.findIndex((item) => item.id === record.id);
   if (index >= 0) {
     state.records[index] = { ...state.records[index], ...record };
@@ -263,6 +374,7 @@ function editRecord(id) {
   elements.estimatedMedals.textContent = formatMedals(record.medals);
   updateWinLoseBanner();
   setStatus("編集中");
+  switchView("register");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -305,20 +417,21 @@ function updateWinLoseBanner() {
 }
 
 function renderAll() {
+  renderCandidateControls();
   renderRecords();
   renderSummary();
   renderRecommendations();
 }
 
 function renderRecords() {
-  const query = elements.searchInput.value.trim().toLowerCase();
-  const filtered = state.records.filter((record) => {
-    const haystack = `${record.shop} ${record.tag} ${record.machine} ${record.number}`.toLowerCase();
-    return haystack.includes(query);
+  const filtered = applyFilters(state.records, {
+    shop: elements.recordsShopFilter.value,
+    tag: elements.recordsTagFilter.value,
+    machine: elements.recordsMachineFilter.value,
   });
 
   if (!filtered.length) {
-    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="9">登録データがありません</td></tr>`;
+    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="8">登録データがありません</td></tr>`;
     return;
   }
 
@@ -333,7 +446,6 @@ function renderRecords() {
           <td class="number-cell">${escapeHtml(record.number)}</td>
           <td class="number-cell">${formatMedals(record.medals)}</td>
           <td class="${record.medals >= 0 ? "win-text" : "lose-text"}">${record.medals >= 0 ? "勝ち" : "負け"}</td>
-          <td>${record.image ? `<img class="thumb" src="${record.image}" alt="登録画像" />` : "なし"}</td>
           <td>
             <div class="row-actions">
               <button class="small-button" type="button" data-edit="${record.id}">編集</button>
@@ -357,6 +469,11 @@ function renderRecords() {
 
 function renderSummary() {
   const mode = state.summaryMode;
+  const summaryRecords = applyFilters(state.records, {
+    shop: elements.summaryShopFilter.value,
+    tag: elements.summaryTagFilter.value,
+    machine: elements.summaryMachineFilter.value,
+  });
   const labels = {
     tag: ["特日タグ", "登録台数"],
     machine: ["機種名", "登録台数"],
@@ -372,7 +489,7 @@ function renderSummary() {
     </tr>
   `;
 
-  const groups = groupRecords(mode);
+  const groups = groupRecords(mode, summaryRecords);
   if (!groups.length) {
     elements.summaryBody.innerHTML = `<tr><td class="empty-row" colspan="5">集計できるデータがありません</td></tr>`;
     return;
@@ -396,41 +513,58 @@ function renderSummary() {
 function renderRecommendations() {
   const tag = elements.recommendTagInput.value;
   const byNumber = state.records.filter((record) => record.tag === tag);
-  const groups = summarizeBy(byNumber, (record) => `${record.machine} / ${record.number}`);
+  const groups = summarizeBy(byNumber, (record) => `${record.shop}|||${record.machine}|||${record.number}`);
   const recommendations = groups
     .map((group) => ({ ...group, grade: gradeGroup(group) }))
     .sort((a, b) => gradeRank(a.grade) - gradeRank(b.grade) || b.average - a.average || b.winRate - a.winRate)
-    .slice(0, 8);
+    .slice(0, 12);
 
   if (!recommendations.length) {
-    elements.recommendationList.innerHTML = `<p class="hint">選択中の特日タグには、まだ登録データがありません。</p>`;
+    elements.recommendationList.innerHTML = `<tr><td class="empty-row" colspan="8">選択中の特日タグには、まだ登録データがありません。</td></tr>`;
     return;
   }
 
   elements.recommendationList.innerHTML = recommendations
-    .map(
-      (item) => `
-        <article class="recommend-card">
-          <div class="grade grade-${item.grade.toLowerCase()}">${item.grade}</div>
-          <div>
-            <div class="recommend-title">${escapeHtml(item.key)}</div>
-            <div class="recommend-meta">
-              勝率 ${Math.round(item.winRate * 100)}% / 平均 ${formatMedals(item.average)} / 総差枚 ${formatMedals(item.total)} / ${item.count}回
-            </div>
-          </div>
-        </article>
-      `
-    )
+    .map((item) => {
+      const [shop, machine, number] = item.key.split("|||");
+      return `
+        <tr>
+          <td>${escapeHtml(shop)}</td>
+          <td>${escapeHtml(machine)}</td>
+          <td class="number-cell">${escapeHtml(number)}</td>
+          <td class="number-cell">${Math.round(item.winRate * 100)}%</td>
+          <td class="number-cell">${formatMedals(item.average)}</td>
+          <td class="number-cell">${formatMedals(item.total)}</td>
+          <td><span class="grade grade-${item.grade.toLowerCase()}">${item.grade}</span></td>
+          <td>${escapeHtml(recommendationReason(item))}</td>
+        </tr>
+      `;
+    })
     .join("");
 }
 
-function groupRecords(mode) {
+function recommendationReason(item) {
+  if (item.grade === "A") return `勝率${Math.round(item.winRate * 100)}%かつ平均差枚がプラスで、${item.count}回の実績があります。`;
+  if (item.grade === "B") return `勝率または平均差枚のどちらかが良好で、候補として期待できます。`;
+  return item.count < 2 ? "実績は少なめですが比較候補として表示しています。" : "上位候補と比べると成績は控えめです。";
+}
+
+function groupRecords(mode, records = state.records) {
   const selectors = {
     tag: (record) => record.tag,
     machine: (record) => record.machine,
     number: (record) => record.number,
   };
-  return summarizeBy(state.records, selectors[mode]).sort((a, b) => b.average - a.average || b.winRate - a.winRate);
+  return summarizeBy(records, selectors[mode]).sort((a, b) => b.average - a.average || b.winRate - a.winRate);
+}
+
+function applyFilters(records, filters) {
+  return records.filter((record) => {
+    if (filters.shop && record.shop !== filters.shop) return false;
+    if (filters.tag && record.tag !== filters.tag) return false;
+    if (filters.machine && record.machine !== filters.machine) return false;
+    return true;
+  });
 }
 
 function summarizeBy(records, selector) {
@@ -507,6 +641,7 @@ function importCsv(event) {
 
     state.records = [...imported, ...state.records];
     saveRecords();
+    seedCandidatesFromRecords();
     renderAll();
     event.target.value = "";
   };
