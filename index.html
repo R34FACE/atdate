@@ -23,184 +23,283 @@
       </div>
     </header>
 
+    <nav class="main-menu" aria-label="主要画面">
+      <button class="menu-tab active" type="button" data-view="recommend" aria-controls="recommendView">次回特日のおすすめ台</button>
+      <button class="menu-tab" type="button" data-view="summary" aria-controls="summaryView">集計</button>
+      <button class="menu-tab" type="button" data-view="records" aria-controls="recordsView">登録データ一覧</button>
+      <button class="menu-tab" type="button" data-view="register" aria-controls="registerView">新規登録</button>
+    </nav>
+
     <main class="layout">
-      <section class="panel register-panel" aria-labelledby="registerTitle">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Register</p>
-            <h2 id="registerTitle">画像から登録</h2>
+      <div id="recommendView" class="view-panel active" data-view-panel="recommend">
+        <section class="panel recommendation-panel" aria-labelledby="recommendTitle">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Next Target</p>
+              <h2 id="recommendTitle">次回特日のおすすめ台</h2>
+            </div>
           </div>
-          <span class="status-pill" id="ocrStatus">待機中</span>
-        </div>
+          <div class="filter-row recommendation-filters" aria-label="おすすめ台絞り込み">
+            <label>
+              店舗名
+              <select id="recommendShopFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              次回特日タグ
+              <select id="recommendTagInput">
+                <option value="ゾロ目日">ゾロ目日</option>
+                <option value="7の日">7の日</option>
+                <option value="周年">周年</option>
+                <option value="月イチ">月イチ</option>
+                <option value="その他">その他</option>
+              </select>
+            </label>
+            <label>
+              機種名
+              <select id="recommendMachineFilter"><option value="">すべて</option></select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table class="recommend-table">
+              <thead>
+                <tr>
+                  <th>店舗名</th>
+                  <th>機種名</th>
+                  <th>台番号</th>
+                  <th>登録回数</th>
+                  <th>勝率</th>
+                  <th>平均差枚</th>
+                  <th>総差枚</th>
+                  <th>評価</th>
+                  <th>理由</th>
+                </tr>
+              </thead>
+              <tbody id="recommendationList"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
-        <form id="scanForm" class="form-grid">
-          <label>
-            日付
-            <input id="dateInput" type="date" required />
-          </label>
-          <label>
-            店舗名
-            <input id="shopInput" type="text" placeholder="例：サンプルホール" required />
-          </label>
-          <label>
-            特日タグ
-            <select id="tagInput" required>
-              <option value="ゾロ目日">ゾロ目日</option>
-              <option value="7の日">7の日</option>
-              <option value="周年">周年</option>
-              <option value="月イチ">月イチ</option>
-              <option value="その他">その他</option>
-            </select>
-          </label>
-          <label>
-            機種名
-            <input id="machineInput" type="text" placeholder="例：スマスロ北斗の拳" required />
-          </label>
-          <label class="wide">
-            グラフ画像
-            <input id="imageInput" type="file" accept="image/*" required />
-          </label>
-          <div class="wide button-row">
-            <button class="primary-button" type="submit">画像を読み取る</button>
-            <button class="ghost-button" id="clearImageButton" type="button">画像クリア</button>
+      <div id="summaryView" class="view-panel" data-view-panel="summary" hidden>
+        <section class="panel summary-panel" aria-labelledby="summaryTitle">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Summary</p>
+              <h2 id="summaryTitle">集計</h2>
+            </div>
+            <div class="tabs" role="tablist" aria-label="集計切替">
+              <button class="tab active" type="button" data-summary="tag">特日タグ別集計</button>
+              <button class="tab" type="button" data-summary="shop">店舗別集計</button>
+              <button class="tab" type="button" data-summary="machine">機種別集計</button>
+              <button class="tab" type="button" data-summary="number">台番号別集計</button>
+              <button class="tab" type="button" data-summary="tail">末尾別集計</button>
+              <button class="tab" type="button" data-summary="range">番号帯別集計</button>
+            </div>
           </div>
-        </form>
+          <div class="filter-row" aria-label="集計絞り込み">
+            <label>
+              店舗名
+              <select id="summaryShopFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              特日タグ
+              <select id="summaryTagFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              機種名
+              <select id="summaryMachineFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              開始日
+              <input id="summaryStartDateFilter" type="date" />
+            </label>
+            <label>
+              終了日
+              <input id="summaryEndDateFilter" type="date" />
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead id="summaryHead"></thead>
+              <tbody id="summaryBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
-        <div class="preview-area">
-          <div class="image-frame">
-            <img id="previewImage" alt="アップロード画像プレビュー" />
-            <div id="emptyPreview" class="empty-preview">グラフ画像を選択してください</div>
+      <div id="recordsView" class="view-panel" data-view-panel="records" hidden>
+        <section class="panel records-panel" aria-labelledby="recordsTitle">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Records</p>
+              <h2 id="recordsTitle">登録データ一覧</h2>
+            </div>
+            <div class="button-row records-actions">
+              <button class="ghost-button" id="recordsExportCsvButton" type="button">CSV出力</button>
+              <label class="ghost-button file-action">
+                CSV取込
+                <input id="recordsImportCsvInput" type="file" accept=".csv,text/csv" />
+              </label>
+              <button class="danger-button" id="clearAllRecordsButton" type="button">全削除</button>
+            </div>
           </div>
-          <div class="readout">
-            <h3>推定結果</h3>
-            <dl>
-              <div>
-                <dt>台番号</dt>
-                <dd id="ocrMachineNumber">未読取</dd>
-              </div>
-              <div>
-                <dt>差枚</dt>
-                <dd id="estimatedMedals">未推定</dd>
-              </div>
-            </dl>
-            <p class="hint">グラフの線色や目盛りにより誤差が出ます。登録前に必ず下の確認欄で修正してください。</p>
+          <div class="filter-row" aria-label="登録データ絞り込み">
+            <label>
+              店舗名
+              <select id="recordsShopFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              特日タグ
+              <select id="recordsTagFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              機種名
+              <select id="recordsMachineFilter"><option value="">すべて</option></select>
+            </label>
+            <label>
+              台番号
+              <input id="recordsNumberFilter" type="search" inputmode="numeric" placeholder="例：123" />
+            </label>
           </div>
-        </div>
-      </section>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>日付</th>
+                  <th>店舗名</th>
+                  <th>特日タグ</th>
+                  <th>機種名</th>
+                  <th>台番号</th>
+                  <th>差枚</th>
+                  <th>勝敗</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="recordsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
-      <section class="panel confirm-panel" aria-labelledby="confirmTitle">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Confirm</p>
-            <h2 id="confirmTitle">確認して登録</h2>
+      <div id="registerView" class="view-panel" data-view-panel="register" hidden>
+        <section class="panel register-panel" aria-labelledby="registerTitle">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Register</p>
+              <h2 id="registerTitle">新規登録</h2>
+            </div>
+            <span class="status-pill" id="ocrStatus">待機中</span>
           </div>
-          <button class="ghost-button" id="resetEditButton" type="button">新規入力へ戻す</button>
-        </div>
 
-        <form id="recordForm" class="form-grid">
-          <input id="editingIdInput" type="hidden" />
-          <label>
-            日付
-            <input id="confirmDateInput" type="date" required />
-          </label>
-          <label>
-            店舗名
-            <input id="confirmShopInput" type="text" required />
-          </label>
-          <label>
-            特日タグ
-            <select id="confirmTagInput" required>
-              <option value="ゾロ目日">ゾロ目日</option>
-              <option value="7の日">7の日</option>
-              <option value="周年">周年</option>
-              <option value="月イチ">月イチ</option>
-              <option value="その他">その他</option>
-            </select>
-          </label>
-          <label>
-            機種名
-            <input id="confirmMachineInput" type="text" required />
-          </label>
-          <label>
-            台番号
-            <input id="confirmNumberInput" type="text" inputmode="numeric" placeholder="例：123" required />
-          </label>
-          <label>
-            差枚
-            <input id="confirmMedalsInput" type="number" step="1" placeholder="例：1250" required />
-          </label>
-          <div class="wide result-banner" id="winLoseBanner">勝敗は差枚から自動判定されます</div>
-          <div class="wide button-row">
-            <button class="primary-button" type="submit">登録する</button>
-            <button class="danger-button" id="deleteEditingButton" type="button" hidden>この登録を削除</button>
-          </div>
-        </form>
-      </section>
+          <form id="scanForm" class="form-grid">
+            <label>
+              日付
+              <input id="dateInput" type="date" required />
+            </label>
+            <label>
+              店舗名
+              <input id="shopInput" type="text" list="shopCandidates" placeholder="候補から選択または直接入力" required />
+              <span class="field-hint">新規追加した店舗名は登録時に候補へ保存されます。</span>
+            </label>
+            <label>
+              特日タグ
+              <select id="tagInput" required>
+                <option value="ゾロ目日">ゾロ目日</option>
+                <option value="7の日">7の日</option>
+                <option value="周年">周年</option>
+                <option value="月イチ">月イチ</option>
+                <option value="その他">その他</option>
+              </select>
+            </label>
+            <label>
+              機種名
+              <input id="machineInput" type="text" list="machineCandidates" placeholder="候補から選択または直接入力" required />
+              <span class="field-hint">新規追加した機種名は登録時に候補へ保存されます。</span>
+            </label>
+            <label class="wide">
+              グラフ画像アップロード
+              <input id="imageInput" type="file" accept="image/*" />
+            </label>
+            <div class="wide button-row">
+              <button class="primary-button" type="submit">画像を読み取る</button>
+              <button class="ghost-button" id="clearImageButton" type="button">画像クリア</button>
+            </div>
+          </form>
 
-      <section class="panel recommendation-panel" aria-labelledby="recommendTitle">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Next Target</p>
-            <h2 id="recommendTitle">次回特日のおすすめ台</h2>
+          <div class="preview-area">
+            <div class="image-frame">
+              <img id="previewImage" alt="アップロード画像プレビュー" />
+              <div id="emptyPreview" class="empty-preview">グラフ画像を選択してください</div>
+            </div>
+            <div class="readout">
+              <h3>推定結果</h3>
+              <dl>
+                <div>
+                  <dt>台番号</dt>
+                  <dd id="ocrMachineNumber">未読取</dd>
+                </div>
+                <div>
+                  <dt>差枚</dt>
+                  <dd id="estimatedMedals">未推定</dd>
+                </div>
+              </dl>
+              <p class="hint">グラフの線色や目盛りにより誤差が出ます。登録前に必ず下の確認欄で修正してください。</p>
+            </div>
           </div>
-          <select id="recommendTagInput">
-            <option value="ゾロ目日">ゾロ目日</option>
-            <option value="7の日">7の日</option>
-            <option value="周年">周年</option>
-            <option value="月イチ">月イチ</option>
-            <option value="その他">その他</option>
-          </select>
-        </div>
-        <div id="recommendationList" class="recommendation-list"></div>
-      </section>
+        </section>
 
-      <section class="panel summary-panel" aria-labelledby="summaryTitle">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Summary</p>
-            <h2 id="summaryTitle">集計</h2>
+        <section class="panel confirm-panel" aria-labelledby="confirmTitle">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Confirm</p>
+              <h2 id="confirmTitle">確認して登録</h2>
+            </div>
+            <button class="ghost-button" id="resetEditButton" type="button">新規入力へ戻す</button>
           </div>
-          <div class="tabs" role="tablist" aria-label="集計切替">
-            <button class="tab active" type="button" data-summary="tag">特日</button>
-            <button class="tab" type="button" data-summary="machine">機種</button>
-            <button class="tab" type="button" data-summary="number">台番</button>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead id="summaryHead"></thead>
-            <tbody id="summaryBody"></tbody>
-          </table>
-        </div>
-      </section>
 
-      <section class="panel records-panel" aria-labelledby="recordsTitle">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Records</p>
-            <h2 id="recordsTitle">登録データ一覧</h2>
-          </div>
-          <input id="searchInput" class="search-input" type="search" placeholder="店舗・機種・台番で検索" />
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>日付</th>
-                <th>店舗</th>
-                <th>特日</th>
-                <th>機種</th>
-                <th>台番</th>
-                <th>差枚</th>
-                <th>勝敗</th>
-                <th>画像</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="recordsBody"></tbody>
-          </table>
-        </div>
-      </section>
+          <form id="recordForm" class="form-grid">
+            <input id="editingIdInput" type="hidden" />
+            <label>
+              日付
+              <input id="confirmDateInput" type="date" required />
+            </label>
+            <label>
+              店舗名
+              <input id="confirmShopInput" type="text" list="shopCandidates" placeholder="候補から選択または直接入力" required />
+            </label>
+            <label>
+              特日タグ
+              <select id="confirmTagInput" required>
+                <option value="ゾロ目日">ゾロ目日</option>
+                <option value="7の日">7の日</option>
+                <option value="周年">周年</option>
+                <option value="月イチ">月イチ</option>
+                <option value="その他">その他</option>
+              </select>
+            </label>
+            <label>
+              機種名
+              <input id="confirmMachineInput" type="text" list="machineCandidates" placeholder="候補から選択または直接入力" required />
+            </label>
+            <label>
+              台番号
+              <input id="confirmNumberInput" type="text" inputmode="numeric" placeholder="例：123" required />
+            </label>
+            <label>
+              差枚
+              <input id="confirmMedalsInput" type="number" step="1" placeholder="例：1250" required />
+            </label>
+            <div class="wide result-banner" id="winLoseBanner">勝敗は差枚から自動判定されます</div>
+            <div class="wide button-row">
+              <button class="primary-button" type="submit">登録する</button>
+              <button class="danger-button" id="deleteEditingButton" type="button" hidden>この登録を削除</button>
+            </div>
+          </form>
+        </section>
+      </div>
     </main>
+
+    <datalist id="shopCandidates"></datalist>
+    <datalist id="machineCandidates"></datalist>
   </body>
 </html>
