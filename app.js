@@ -5,6 +5,8 @@ const TAGS = ["ゾロ目日", "7の日", "周年", "月イチ", "その他"];
 const state = {
   records: loadRecords(),
   selectedImage: "",
+  selectedImages: [],
+  batchResults: [],
   summaryMode: "tag",
   activeView: "recommend",
   candidates: loadCandidates(),
@@ -23,6 +25,9 @@ const elements = {
   ocrMachineNumber: $("ocrMachineNumber"),
   estimatedMedals: $("estimatedMedals"),
   clearImageButton: $("clearImageButton"),
+  batchPanel: $("batchPanel"),
+  batchResults: $("batchResults"),
+  bulkRegisterButton: $("bulkRegisterButton"),
   resetEditButton: $("resetEditButton"),
   deleteEditingButton: $("deleteEditingButton"),
   editingIdInput: $("editingIdInput"),
@@ -67,6 +72,10 @@ function bindEvents() {
   elements.recordForm.addEventListener("submit", handleSaveRecord);
   $("confirmMedalsInput").addEventListener("input", updateWinLoseBanner);
   elements.clearImageButton.addEventListener("click", clearImage);
+  elements.bulkRegisterButton.addEventListener("click", saveAllBatchResults);
+  elements.batchResults.addEventListener("input", handleBatchInput);
+  elements.batchResults.addEventListener("change", handleBatchInput);
+  elements.batchResults.addEventListener("click", handleBatchClick);
   elements.resetEditButton.addEventListener("click", resetEditor);
   elements.deleteEditingButton.addEventListener("click", () => {
     const id = elements.editingIdInput.value;
@@ -210,43 +219,98 @@ function switchView(view) {
   });
 }
 
-function handleImageSelect(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
+async function handleImageSelect(event) {
+  const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
+  if (!files.length) return;
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    state.selectedImage = String(reader.result);
+  setStatus(`${files.length}枚の画像を読込中...`);
+  const images = await Promise.all(files.map(readFileAsDataUrl));
+  state.selectedImages = images;
+  state.selectedImage = images[0] || "";
+  state.batchResults = [];
+
+  if (state.selectedImage) {
     elements.previewImage.src = state.selectedImage;
     elements.previewImage.parentElement.classList.add("has-image");
-    setStatus("画像選択済み");
-  };
-  reader.readAsDataURL(file);
+  }
+  hideBatchResults();
+  setStatus(files.length > 1 ? `${files.length}枚選択済み` : "画像選択済み");
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function handleScan(event) {
   event.preventDefault();
-  if (!state.selectedImage) {
+  const images = state.selectedImages.length ? state.selectedImages : state.selectedImage ? [state.selectedImage] : [];
+  if (!images.length) {
     syncConfirmFromScan();
+    hideBatchResults();
     setStatus("画像なしで確認欄へ反映");
     return;
   }
 
   syncConfirmFromScan();
-  setStatus("読取中...");
+  state.batchResults = [];
+  hideBatchResults();
+  setStatus(`読取中... 0/${images.length}`);
 
-  const scanResult = await analyzeAtGraphImage(state.selectedImage);
-  const machineNumber = scanResult.number || (await readMachineNumber(state.selectedImage));
-  const estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : await estimateMedalsFromGraph(state.selectedImage);
+  const results = [];
+  for (const [index, image] of images.entries()) {
+    setStatus(`読取中... ${index + 1}/${images.length}`);
+    const scan = await scanSingleImage(image);
+    results.push(createBatchResult(image, scan, index));
+  }
 
-  const fallbackNumber = $("confirmNumberInput").value || "";
-  const normalizedNumber = machineNumber || fallbackNumber;
-  $("confirmNumberInput").value = normalizedNumber;
-  $("confirmMedalsInput").value = Number.isFinite(estimatedMedals) ? String(estimatedMedals) : "0";
-  elements.ocrMachineNumber.textContent = normalizedNumber || "未読取";
-  elements.estimatedMedals.textContent = formatMedals(Number($("confirmMedalsInput").value));
+  const first = results[0];
+  fillConfirmFromScanResult(first);
+  state.batchResults = results;
+  renderBatchResults();
   updateWinLoseBanner();
-  setStatus("確認してください");
+  setStatus(images.length > 1 ? `${images.length}件の結果を確認してください` : "確認してください");
+}
+
+async function scanSingleImage(imageData) {
+  const scanResult = await analyzeAtGraphImage(imageData);
+  const machineNumber = scanResult.number || (await readMachineNumber(imageData));
+  const estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : await estimateMedalsFromGraph(imageData);
+  return { number: machineNumber || "", medals: Number.isFinite(estimatedMedals) ? estimatedMedals : 0 };
+}
+
+function createBatchResult(image, scan, index) {
+  return {
+    id: crypto.randomUUID(),
+    image,
+    date: $("dateInput").value,
+    shop: $("shopInput").value.trim(),
+    tag: $("tagInput").value,
+    machine: $("machineInput").value.trim(),
+    number: scan.number || "",
+    medals: Number.isFinite(scan.medals) ? Math.round(scan.medals) : 0,
+    saved: false,
+    index: index + 1,
+  };
+}
+
+function fillConfirmFromScanResult(result) {
+  if (!result) return;
+  $("confirmDateInput").value = result.date;
+  $("confirmShopInput").value = result.shop;
+  $("confirmTagInput").value = result.tag;
+  $("confirmMachineInput").value = result.machine;
+  $("confirmNumberInput").value = result.number;
+  $("confirmMedalsInput").value = String(result.medals);
+  state.selectedImage = result.image;
+  elements.previewImage.src = result.image;
+  elements.previewImage.parentElement.classList.add("has-image");
+  elements.ocrMachineNumber.textContent = result.number || "未読取";
+  elements.estimatedMedals.textContent = formatMedals(result.medals);
 }
 
 async function readMachineNumber(imageData) {
@@ -532,18 +596,156 @@ function findGraphEndPoint(data, width, height) {
   return pickAtGraphEndpoint(points, width);
 }
 
-function syncConfirmFromScan() {
-  $("confirmDateInput").value = $("dateInput").value;
-  $("confirmShopInput").value = $("shopInput").value;
-  $("confirmTagInput").value = $("tagInput").value;
-  $("confirmMachineInput").value = $("machineInput").value;
-  updateWinLoseBanner();
+
+function hideBatchResults() {
+  state.batchResults = state.batchResults.filter(Boolean);
+  elements.batchPanel.hidden = true;
+  elements.batchResults.innerHTML = "";
 }
 
-function handleSaveRecord(event) {
-  event.preventDefault();
+function renderBatchResults() {
+  if (state.batchResults.length <= 1) {
+    elements.batchPanel.hidden = true;
+    elements.batchResults.innerHTML = "";
+    return;
+  }
+
+  elements.batchPanel.hidden = false;
+  elements.batchResults.innerHTML = state.batchResults
+    .map((result, index) => {
+      const resultClass = Number(result.medals) > 0 ? "win" : "lose";
+      return `
+        <article class="batch-card ${result.saved ? "saved" : ""}">
+          <div class="batch-image-wrap">
+            <img class="batch-thumb" src="${result.image}" alt="読み取り画像 ${index + 1}" />
+            <span class="status-pill">${result.saved ? "登録済み" : `${index + 1}枚目`}</span>
+          </div>
+          <div class="batch-form form-grid">
+            <label>
+              日付
+              <input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required />
+            </label>
+            <label>
+              店舗名
+              <input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required />
+            </label>
+            <label>
+              特日タグ
+              <select data-batch-index="${index}" data-batch-field="tag" required>
+                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
+              </select>
+            </label>
+            <label>
+              機種名
+              <input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required />
+            </label>
+            <label>
+              台番号
+              <input type="text" inputmode="numeric" data-batch-index="${index}" data-batch-field="number" value="${escapeHtml(result.number)}" placeholder="手動入力可" required />
+            </label>
+            <label>
+              差枚
+              <input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="手動入力可" required />
+            </label>
+            <div class="wide batch-result-banner result-banner ${resultClass}">
+              ${formatMedals(result.medals)} / ${Number(result.medals) > 0 ? "勝ち" : "負け"}
+            </div>
+            <div class="wide button-row">
+              <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
+            </div>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function handleBatchInput(event) {
+  const input = event.target.closest("[data-batch-index][data-batch-field]");
+  if (!input) return;
+  const index = Number(input.dataset.batchIndex);
+  const field = input.dataset.batchField;
+  const result = state.batchResults[index];
+  if (!result) return;
+  result[field] = field === "medals" ? input.value : input.value.trim();
+  result.saved = false;
+
+  const card = input.closest(".batch-card");
+  const saveButton = card?.querySelector("[data-batch-save]");
+  if (saveButton) saveButton.disabled = false;
+  card?.classList.remove("saved");
+  if (field === "medals") updateBatchResultBanner(card, result.medals);
+}
+
+function updateBatchResultBanner(card, medals) {
+  const banner = card?.querySelector(".batch-result-banner");
+  if (!banner) return;
+  banner.classList.toggle("win", Number(medals) > 0);
+  banner.classList.toggle("lose", Number(medals) <= 0);
+  banner.textContent = `${formatMedals(medals)} / ${Number(medals) > 0 ? "勝ち" : "負け"}`;
+}
+
+function handleBatchClick(event) {
+  const button = event.target.closest("[data-batch-save]");
+  if (!button) return;
+  const index = Number(button.dataset.batchSave);
+  saveBatchResult(index);
+}
+
+function saveBatchResult(index) {
+  const result = state.batchResults[index];
+  if (!result) return false;
+  if (!validateBatchResult(result)) {
+    alert(`${index + 1}件目の必須項目（日付・店舗名・機種名・台番号・差枚）を確認してください。`);
+    return false;
+  }
+  const record = createRecordFromBatchResult(result);
+  saveRecord(record);
+  result.saved = true;
+  renderBatchResults();
+  renderAll();
+  return true;
+}
+
+function saveAllBatchResults() {
+  if (!state.batchResults.length) return;
+  for (let index = 0; index < state.batchResults.length; index += 1) {
+    if (state.batchResults[index].saved) continue;
+    if (!saveBatchResult(index)) return;
+  }
+  setStatus(`${state.batchResults.length}件を登録しました`);
+}
+
+function validateBatchResult(result) {
+  return Boolean(
+    result.date &&
+      String(result.shop || "").trim() &&
+      String(result.machine || "").trim() &&
+      String(result.number || "").trim() &&
+      String(result.medals ?? "").trim() !== "" &&
+      Number.isFinite(Number(result.medals))
+  );
+}
+
+function createRecordFromBatchResult(result) {
+  const medals = Number(result.medals);
+  return {
+    id: crypto.randomUUID(),
+    date: result.date,
+    shop: String(result.shop || "").trim(),
+    tag: TAGS.includes(result.tag) ? result.tag : "その他",
+    machine: String(result.machine || "").trim(),
+    number: String(result.number || "").trim(),
+    medals: Number.isFinite(medals) ? Math.round(medals) : 0,
+    result: medals > 0 ? "勝ち" : "負け",
+    image: result.image,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function createRecordFromConfirmForm() {
   const medalValue = Number($("confirmMedalsInput").value);
-  const record = {
+  return {
     id: elements.editingIdInput.value || crypto.randomUUID(),
     date: $("confirmDateInput").value,
     shop: $("confirmShopInput").value.trim(),
@@ -555,6 +757,15 @@ function handleSaveRecord(event) {
     image: state.selectedImage,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function validateRecord(record) {
+  return Boolean(record.date && record.shop && record.machine && record.number && Number.isFinite(Number(record.medals)));
+}
+
+function saveRecord(record) {
+  addCandidate("shops", record.shop);
+  addCandidate("machines", record.machine);
 
   addCandidate("shops", record.shop);
   addCandidate("machines", record.machine);
@@ -567,6 +778,24 @@ function handleSaveRecord(event) {
   }
 
   saveRecords();
+}
+
+function syncConfirmFromScan() {
+  $("confirmDateInput").value = $("dateInput").value;
+  $("confirmShopInput").value = $("shopInput").value;
+  $("confirmTagInput").value = $("tagInput").value;
+  $("confirmMachineInput").value = $("machineInput").value;
+  updateWinLoseBanner();
+}
+
+function handleSaveRecord(event) {
+  event.preventDefault();
+  const record = createRecordFromConfirmForm();
+  if (!validateRecord(record)) {
+    alert("必須項目（日付・店舗名・機種名・台番号・差枚）を確認してください。");
+    return;
+  }
+  saveRecord(record);
   resetEditor();
   renderAll();
 }
@@ -582,6 +811,9 @@ function editRecord(id) {
   $("confirmNumberInput").value = record.number;
   $("confirmMedalsInput").value = record.medals;
   state.selectedImage = record.image || "";
+  state.selectedImages = state.selectedImage ? [state.selectedImage] : [];
+  state.batchResults = [];
+  hideBatchResults();
   elements.deleteEditingButton.hidden = false;
   elements.previewImage.src = state.selectedImage;
   elements.previewImage.parentElement.classList.toggle("has-image", Boolean(state.selectedImage));
@@ -612,10 +844,13 @@ function resetEditor() {
 function clearImage() {
   elements.imageInput.value = "";
   state.selectedImage = "";
+  state.selectedImages = [];
+  state.batchResults = [];
   elements.previewImage.removeAttribute("src");
   elements.previewImage.parentElement.classList.remove("has-image");
   elements.ocrMachineNumber.textContent = "未読取";
   elements.estimatedMedals.textContent = "未推定";
+  hideBatchResults();
   setStatus("待機中");
 }
 

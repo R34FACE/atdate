@@ -633,3 +633,58 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+.batch-panel {
+  grid-column: 1 / -1;
+}
+
+.batch-results {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.batch-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.36fr) minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.batch-card.saved {
+  border-color: rgba(15, 118, 110, 0.45);
+  background: #f0fbf8;
+}
+
+.batch-image-wrap {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.batch-thumb {
+  width: 100%;
+  max-height: 240px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  object-fit: contain;
+  background: #f9fbfb;
+}
+
+.batch-form {
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+@media (max-width: 760px) {
+  .batch-card {
+    grid-template-columns: 1fr;
+  }
+}
