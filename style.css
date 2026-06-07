@@ -725,3 +725,53 @@ button:disabled {
   font-size: 13px;
   font-weight: 700;
 }
+
+.batch-table-wrap {
+  padding: 0;
+}
+
+.batch-table {
+  min-width: 980px;
+}
+
+.batch-table th,
+.batch-table td {
+  vertical-align: top;
+}
+
+.batch-table input,
+.batch-table select,
+.batch-table textarea {
+  min-width: 120px;
+  min-height: 36px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.batch-table textarea {
+  width: 220px;
+  resize: vertical;
+}
+
+.batch-row.saved {
+  background: #f0fbf8;
+}
+
+.batch-row.needs-review {
+  background: #fff8ed;
+}
+
+.batch-result-text {
+  min-width: 54px;
+  padding-top: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.batch-result-text.win {
+  color: var(--win);
+}
+
+.batch-result-text.lose {
+  color: var(--lose);
+}

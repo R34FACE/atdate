@@ -364,13 +364,15 @@ async function recognizeGraphDiffImage(imageData, imageIndex = 0) {
         recognizeGraphUnitNumber(sourceCanvas, rect),
         analyzeGraphDiff(sourceCanvas, rect),
       ]);
-      const warnings = [...(unitResult.warnings || []), ...(diffResult.warnings || [])];
+      const warnings = uniqueSorted([...(unitResult.warnings || []), ...(diffResult.warnings || [])]);
       const failed = !unitResult.number || !Number.isFinite(diffResult.medals);
+      const memo = buildScanMemo(unitResult, diffResult, warnings);
       if (failed && !warnings.length) warnings.push("要確認：読み取り結果を手動で確認してください。");
       scans.push({
         number: unitResult.number || "",
         numberCandidates: unitResult.candidates || [],
         medals: Number.isFinite(diffResult.medals) ? diffResult.medals : 0,
+        memo,
         warnings,
         failed,
         image: previewCanvas.toDataURL("image/png"),
@@ -383,6 +385,7 @@ async function recognizeGraphDiffImage(imageData, imageIndex = 0) {
       debugLog("エラー発生時の error.message", error?.message || String(error));
       scans.push({
         ...createFailedScanResult(["要確認：このグラフの読み取りに失敗しました。手動入力してください。"]),
+        memo: "読み取り失敗",
         image: cropCanvas(sourceCanvas, rect, { padding: 0, fill: "white" }).toDataURL("image/png"),
         rect,
         sourceIndex: imageIndex + 1,
@@ -398,18 +401,33 @@ async function scanSingleImage(imageData) {
   return scans[0] || createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]);
 }
 
+function buildScanMemo(unitResult, diffResult, warnings = []) {
+  const messages = [];
+  if (!unitResult.number && !Number.isFinite(diffResult.medals)) {
+    messages.push("読み取り失敗");
+  } else {
+    if (!unitResult.number) messages.push("台番号要確認");
+    if (!Number.isFinite(diffResult.medals)) messages.push("差枚要確認");
+  }
+  warnings.forEach((warning) => {
+    if (/数字誤認識|0ライン|異常値|黄色文字/.test(warning)) messages.push(warning);
+  });
+  return uniqueSorted(messages).join(" / ");
+}
+
 function createFailedScanResult(warnings = []) {
   return {
     number: "",
     numberCandidates: [],
     medals: 0,
+    memo: warnings.join(" / ") || "読み取り失敗",
     warnings,
     failed: true,
   };
 }
 
 function getScanStatusMessage(results, imageCount) {
-  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []));
+  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []).filter((warning) => warning !== "数字除外済み"));
   if (warnings.length) return warnings.join(" / ");
   const graphCount = results.length;
   if (results.some((result) => result.failed)) return "読み取りできませんでした。手動で入力してください。";
@@ -428,6 +446,7 @@ function createBatchResult(image, scan, index) {
     machine: $("machineInput").value.trim(),
     number: scan.number || "",
     medals: Number.isFinite(scan.medals) ? Math.round(scan.medals) : 0,
+    memo: scan.memo || (scan.warnings || []).join(" / "),
     warnings: scan.warnings || [],
     numberCandidates: scan.numberCandidates || [],
     failed: Boolean(scan.failed),
@@ -759,33 +778,50 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
   const textBlocks = detectYellowTextBlocks(yellowComponents, graphCanvas.width, graphCanvas.height);
   const lineMask = removeYellowTextBlocksFromMask(yellowMask, graphCanvas.width, textBlocks);
   const trace = buildYellowLineTrace(lineMask, graphCanvas.width, graphCanvas.height);
-  const segments = findYellowLineTraceSegments(trace, graphCanvas.width);
-  const endpoint = detectYellowEndpoint(segments, graphCanvas.width);
-  const zeroLineY = detectZeroLineY(imageData);
+  const segments = findYellowLineTraceSegments(trace, graphCanvas.width, graphCanvas.height, textBlocks);
+  const endpoint = detectYellowEndpoint(segments, graphCanvas.width, graphCanvas.height, textBlocks);
+  const zeroLine = detectZeroLineY(imageData);
+  const zeroLineY = zeroLine?.y ?? null;
+  const endpointIsText = endpointLooksLikeText(endpoint, textBlocks, graphCanvas.width, graphCanvas.height);
 
   debugLog("analyzeGraphDiff", {
     graphRect,
     yellowComponents: yellowComponents.length,
     yellowTextBlocks: textBlocks.length,
+    textBlocks,
     tracePoints: trace.filter(Boolean).length,
-    segments: segments.map((segment) => ({ startX: segment.startX, endX: segment.endX, length: segment.points.length })),
-    zeroLineY,
+    segments: segments.map((segment) => ({ startX: segment.startX, endX: segment.endX, length: segment.points.length, textLike: segment.textLike })),
+    zeroLine,
     endpoint,
+    endpointIsText,
+    yellowTextRemoved: textBlocks.length > 0,
   });
 
   if (!endpoint) {
-    const message = "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
+    const message = segments.some((segment) => segment.textLike)
+      ? "要確認：数字誤認識（黄色文字をグラフ線候補から除外しました）"
+      : "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
     setStatus(message);
     return { medals: Number.NaN, warnings: [message] };
   }
+
+  const warnings = [];
+  if (!zeroLine?.detected) warnings.push("要確認：0ラインを検出できませんでした");
+  if (endpointIsText) warnings.push("要確認：数字誤認識（黄色文字を終点候補として検出）");
 
   const graphTop = Math.max(0, graphCanvas.height * 0.08);
   const graphBottom = Math.min(graphCanvas.height - 1, graphCanvas.height * 0.92);
   const baseZeroLine = Number.isFinite(zeroLineY) ? zeroLineY : graphCanvas.height * 0.5;
   const span = Math.max(1, Math.max(baseZeroLine - graphTop, graphBottom - baseZeroLine));
   const medals = Math.round(((baseZeroLine - endpoint.y) / span) * 5000 / 50) * 50;
-  debugLog("推定差枚", { medals, zeroLineY: baseZeroLine, endpoint });
-  return { medals, warnings: [] };
+  if (medals <= -5000 || medals >= 5000) warnings.push("要確認：数字誤認識または推定差枚が異常値です");
+  debugLog("推定差枚", { medals, zeroLineY: baseZeroLine, endpoint, warnings });
+
+  if (warnings.length) {
+    setStatus(warnings[0]);
+    return { medals: Number.NaN, warnings: uniqueSorted(warnings) };
+  }
+  return { medals, warnings: textBlocks.length ? ["数字除外済み"] : [] };
 }
 
 function buildYellowMask(imageData) {
@@ -815,30 +851,106 @@ function countMaskPixels(mask, width, rect) {
 }
 
 function detectYellowTextBlocks(components, width, height) {
-  return components.filter((component) => {
+  const characterBlocks = components.filter((component) => {
+    if (isLikelyYellowPayoutText(component, width, height)) return true;
     if (isLikelyYellowLineComponent(component, width, height)) return false;
-    const inTextZone = component.left > width * 0.55 || component.top > height * 0.68 || component.bottom < height * 0.16;
-    const characterSized = component.width <= Math.max(40, width * 0.16) && component.height <= Math.max(34, height * 0.18);
+    const inTextZone = component.left > width * 0.52 || component.top > height * 0.62 || component.bottom < height * 0.16;
+    const characterSized = component.width <= Math.max(44, width * 0.18) && component.height <= Math.max(38, height * 0.22);
     return inTextZone && characterSized;
   });
+  return mergeTextBlocks(groupYellowTextBlocks(characterBlocks, width, height));
+}
+
+function isLikelyYellowPayoutText(component, width, height) {
+  const area = component.width * component.height;
+  const density = component.pixels / Math.max(1, area);
+  const inPayoutZone = component.left >= width * 0.52 && component.top >= height * 0.52;
+  const compact = component.width <= Math.max(58, width * 0.22) && component.height <= Math.max(46, height * 0.24);
+  const digitLike = density >= 0.08 && density <= 0.92;
+  return inPayoutZone && compact && digitLike;
+}
+
+function groupYellowTextBlocks(blocks, width, height) {
+  const groups = [];
+  blocks
+    .slice()
+    .sort((a, b) => a.top - b.top || a.left - b.left)
+    .forEach((block) => {
+      const padded = padRect(block, Math.max(4, width * 0.01), Math.max(4, height * 0.015), width, height);
+      const group = groups.find((item) => rectOverlapRatio(item, padded) > 0 || rectDistance(item, padded) < Math.max(16, width * 0.04));
+      if (!group) {
+        groups.push({ ...padded, pixels: block.pixels || 0 });
+        return;
+      }
+      group.left = Math.min(group.left, padded.left);
+      group.top = Math.min(group.top, padded.top);
+      group.right = Math.max(group.right, padded.right);
+      group.bottom = Math.max(group.bottom, padded.bottom);
+      group.width = group.right - group.left + 1;
+      group.height = group.bottom - group.top + 1;
+      group.pixels = (group.pixels || 0) + (block.pixels || 0);
+    });
+  return groups;
+}
+
+function mergeTextBlocks(blocks) {
+  const merged = [];
+  blocks.forEach((block) => {
+    const existing = merged.find((item) => rectOverlapRatio(item, block) > 0 || rectDistance(item, block) < 10);
+    if (!existing) {
+      merged.push({ ...block });
+      return;
+    }
+    existing.left = Math.min(existing.left, block.left);
+    existing.top = Math.min(existing.top, block.top);
+    existing.right = Math.max(existing.right, block.right);
+    existing.bottom = Math.max(existing.bottom, block.bottom);
+    existing.width = existing.right - existing.left + 1;
+    existing.height = existing.bottom - existing.top + 1;
+    existing.pixels = (existing.pixels || 0) + (block.pixels || 0);
+  });
+  return merged;
+}
+
+function rectDistance(a, b) {
+  const dx = Math.max(0, Math.max(a.left - b.right, b.left - a.right));
+  const dy = Math.max(0, Math.max(a.top - b.bottom, b.top - a.bottom));
+  return Math.hypot(dx, dy);
+}
+
+function padRect(rect, padX, padY, width, height) {
+  return normalizeRect(
+    {
+      left: rect.left - padX,
+      right: rect.right + padX,
+      top: rect.top - padY,
+      bottom: rect.bottom + padY,
+    },
+    width,
+    height
+  );
 }
 
 function removeYellowTextBlocksFromMask(mask, width, textBlocks) {
   const cleaned = new Uint8Array(mask);
+  const height = Math.max(1, Math.floor(mask.length / width));
   textBlocks.forEach((block) => {
-    for (let y = block.top; y <= block.bottom; y += 1) {
-      for (let x = block.left; x <= block.right; x += 1) cleaned[y * width + x] = 0;
+    const padded = padRect(block, Math.max(5, width * 0.012), Math.max(5, height * 0.018), width, height);
+    for (let y = padded.top; y <= padded.bottom; y += 1) {
+      for (let x = padded.left; x <= padded.right; x += 1) cleaned[y * width + x] = 0;
     }
   });
   return cleaned;
 }
 
 function isLikelyYellowLineComponent(component, width, height) {
+  if (isLikelyYellowPayoutText(component, width, height)) return false;
   const area = component.width * component.height;
   const density = component.pixels / Math.max(1, area);
-  const longEnough = component.width >= width * 0.10 || component.height >= height * 0.12;
-  const notDenseText = density < 0.75 || component.width >= width * 0.18;
-  return longEnough && notDenseText;
+  const horizontalLine = component.width >= width * 0.16 && component.height <= height * 0.28;
+  const longTrace = component.width >= width * 0.10 && density < 0.72;
+  const tallButNotRightText = component.height >= height * 0.16 && component.left < width * 0.70 && density < 0.45;
+  return horizontalLine || longTrace || tallButNotRightText;
 }
 
 function detectZeroLineY(imageData) {
@@ -858,7 +970,8 @@ function detectZeroLineY(imageData) {
     }
     if (count > best.count) best = { y, count };
   }
-  return best.count > width * 0.12 ? best.y : height * 0.5;
+  const threshold = width * 0.12;
+  return { y: best.count > threshold ? best.y : null, detected: best.count > threshold, count: best.count, threshold };
 }
 
 function buildYellowLineTrace(mask, width, height) {
@@ -875,16 +988,16 @@ function buildYellowLineTrace(mask, width, height) {
   return trace;
 }
 
-function findYellowLineTraceSegments(trace, width) {
+function findYellowLineTraceSegments(trace, width, height, textBlocks = []) {
   const segments = [];
   let current = [];
   let gap = 0;
   const maxGap = Math.max(3, Math.round(width * 0.012));
 
-  trace.forEach((point, x) => {
+  trace.forEach((point) => {
     if (point) {
-      if (current.length && Math.abs(point.y - current[current.length - 1].y) > 80) {
-        if (current.length >= 4) segments.push(segmentFromPoints(current));
+      if (current.length && Math.abs(point.y - current[current.length - 1].y) > Math.max(28, height * 0.20)) {
+        if (current.length >= 4) segments.push(segmentFromPoints(current, width, height, textBlocks));
         current = [];
       }
       current.push(point);
@@ -895,35 +1008,61 @@ function findYellowLineTraceSegments(trace, width) {
     gap += 1;
     if (gap > maxGap) {
       const trimmed = current.slice(0, Math.max(0, current.length - gap + 1));
-      if (trimmed.length >= 4) segments.push(segmentFromPoints(trimmed));
+      if (trimmed.length >= 4) segments.push(segmentFromPoints(trimmed, width, height, textBlocks));
       current = [];
       gap = 0;
     }
   });
 
-  if (current.length >= 4) segments.push(segmentFromPoints(current));
-  return segments.filter((segment) => segment.points.length >= Math.max(4, width * 0.015));
+  if (current.length >= 4) segments.push(segmentFromPoints(current, width, height, textBlocks));
+  return segments.filter((segment) => segment.points.length >= Math.max(5, width * 0.018));
 }
 
-function segmentFromPoints(points) {
-  return { startX: points[0].x, endX: points[points.length - 1].x, points };
+function segmentFromPoints(points, width, height, textBlocks = []) {
+  const segment = { startX: points[0].x, endX: points[points.length - 1].x, points };
+  const endpoint = endpointFromTraceSegment(segment, width);
+  segment.textLike = endpointLooksLikeText(endpoint, textBlocks, width, height) || looksLikeTextOnlySegment(segment, width, height);
+  return segment;
 }
 
-function detectYellowEndpoint(segments, width) {
-  if (!segments.length) return null;
-  const rightmost = segments
+function looksLikeTextOnlySegment(segment, width, height) {
+  const segmentWidth = segment.endX - segment.startX + 1;
+  const ys = segment.points.map((point) => point.y);
+  const segmentHeight = Math.max(...ys) - Math.min(...ys) + 1;
+  const inPayoutZone = segment.endX > width * 0.60 && Math.min(...ys) > height * 0.50;
+  const compact = segmentWidth < width * 0.18 && segmentHeight < height * 0.28;
+  return inPayoutZone && compact;
+}
+
+function detectYellowEndpoint(segments, width, height, textBlocks = []) {
+  const candidates = segments
     .slice()
-    .sort((a, b) => b.endX - a.endX || b.points.length - a.points.length)[0];
-  return endpointFromTraceSegment(rightmost, width);
+    .sort((a, b) => b.endX - a.endX || b.points.length - a.points.length);
+  for (const segment of candidates) {
+    if (segment.textLike) continue;
+    const endpoint = endpointFromTraceSegment(segment, width);
+    if (!endpointLooksLikeText(endpoint, textBlocks, width, height)) return endpoint;
+  }
+  return null;
 }
 
 function endpointFromTraceSegment(segment, width) {
   if (!segment?.points?.length) return null;
-  const tailWidth = Math.max(4, Math.round(width * 0.015));
+  const tailWidth = Math.max(4, Math.round(width * 0.02));
   const tail = segment.points.filter((point) => point.x >= segment.endX - tailWidth);
   const usable = tail.length ? tail : segment.points.slice(-5);
   const averageY = usable.reduce((sum, point) => sum + point.y, 0) / usable.length;
   return { x: segment.endX, y: averageY };
+}
+
+function endpointLooksLikeText(endpoint, textBlocks = [], width = 1, height = 1) {
+  if (!endpoint) return false;
+  const nearTextBlock = textBlocks.some((block) => {
+    const padded = padRect(block, Math.max(10, width * 0.025), Math.max(8, height * 0.025), width, height);
+    return endpoint.x >= padded.left && endpoint.x <= padded.right && endpoint.y >= padded.top && endpoint.y <= padded.bottom;
+  });
+  const inPayoutCorner = endpoint.x > width * 0.72 && endpoint.y > height * 0.62;
+  return nearTextBlock || inPayoutCorner;
 }
 
 
@@ -1173,7 +1312,7 @@ function renderBatchWarnings(result) {
     messages.push(`台番号候補：${result.numberCandidates.join(" / ")}`);
   }
   if (!messages.length) return "";
-  return `<div class="wide batch-warning">${messages.map(escapeHtml).join("<br />")}</div>`;
+  return messages.map(escapeHtml).join(" / ");
 }
 
 function hideBatchResults() {
@@ -1183,61 +1322,66 @@ function hideBatchResults() {
 }
 
 function renderBatchResults() {
-  if (state.batchResults.length <= 1) {
+  if (!state.batchResults.length) {
     elements.batchPanel.hidden = true;
     elements.batchResults.innerHTML = "";
     return;
   }
 
   elements.batchPanel.hidden = false;
-  elements.batchResults.innerHTML = state.batchResults
-    .map((result, index) => {
-      const resultClass = Number(result.medals) > 0 ? "win" : "lose";
-      return `
-        <article class="batch-card ${result.saved ? "saved" : ""}">
-          <div class="batch-image-wrap">
-            <img class="batch-thumb" src="${result.image}" alt="読み取り画像 ${index + 1}" />
-            <span class="status-pill">${result.saved ? "登録済み" : result.failed ? "要確認" : `${index + 1}件目`}</span>
-          </div>
-          <div class="batch-form form-grid">
-            <label>
-              日付
-              <input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required />
-            </label>
-            <label>
-              店舗名
-              <input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required />
-            </label>
-            <label>
-              特日タグ
-              <select data-batch-index="${index}" data-batch-field="tag" required>
-                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
-              </select>
-            </label>
-            <label>
-              機種名
-              <input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required />
-            </label>
-            <label>
-              台番号
-              <input type="text" inputmode="numeric" data-batch-index="${index}" data-batch-field="number" value="${escapeHtml(result.number)}" placeholder="手動入力可" required />
-            </label>
-            <label>
-              差枚
-              <input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="手動入力可" required />
-            </label>
-            <div class="wide batch-result-banner result-banner ${resultClass}">
-              ${formatMedals(result.medals)} / ${Number(result.medals) > 0 ? "勝ち" : "負け"}
-            </div>
-            ${renderBatchWarnings(result)}
-            <div class="wide button-row">
-              <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
-            </div>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
+  elements.batchResults.innerHTML = `
+    <div class="table-wrap batch-table-wrap">
+      <table class="batch-table">
+        <thead>
+          <tr>
+            <th>状態</th>
+            <th>日付</th>
+            <th>店舗名</th>
+            <th>特日タグ</th>
+            <th>機種名</th>
+            <th>台番号</th>
+            <th>差枚</th>
+            <th>勝敗</th>
+            <th>メモ</th>
+            <th>削除</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${state.batchResults.map(renderBatchResultRow).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderBatchResultRow(result, index) {
+  const resultClass = Number(result.medals) > 0 ? "win" : "lose";
+  const status = result.saved ? "登録済み" : result.failed ? "要確認" : "未登録";
+  const warningText = renderBatchWarnings(result);
+  const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
+  return `
+    <tr class="batch-row ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}">
+      <td><span class="status-pill">${escapeHtml(status)}</span></td>
+      <td><input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required /></td>
+      <td><input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required /></td>
+      <td>
+        <select data-batch-index="${index}" data-batch-field="tag" required>
+          ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
+        </select>
+      </td>
+      <td><input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required /></td>
+      <td><input type="text" inputmode="numeric" data-batch-index="${index}" data-batch-field="number" value="${escapeHtml(result.number)}" placeholder="手動入力" required /></td>
+      <td><input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="要確認" required /></td>
+      <td class="batch-result-text ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</td>
+      <td><textarea data-batch-index="${index}" data-batch-field="memo" rows="2" placeholder="要確認メモ">${escapeHtml(memo)}</textarea></td>
+      <td>
+        <div class="row-actions">
+          <button class="small-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>登録</button>
+          <button class="small-button delete" type="button" data-batch-delete="${index}">削除</button>
+        </div>
+      </td>
+    </tr>
+  `;
 }
 
 function handleBatchInput(event) {
@@ -1249,23 +1393,33 @@ function handleBatchInput(event) {
   if (!result) return;
   result[field] = field === "medals" ? input.value : input.value.trim();
   result.saved = false;
+  if (field === "memo") result.warnings = [];
 
-  const card = input.closest(".batch-card");
-  const saveButton = card?.querySelector("[data-batch-save]");
+  const row = input.closest(".batch-row");
+  const saveButton = row?.querySelector("[data-batch-save]");
   if (saveButton) saveButton.disabled = false;
-  card?.classList.remove("saved");
-  if (field === "medals") updateBatchResultBanner(card, result.medals);
+  row?.classList.remove("saved");
+  if (field === "medals") updateBatchResultBanner(row, result.medals);
 }
 
-function updateBatchResultBanner(card, medals) {
-  const banner = card?.querySelector(".batch-result-banner");
-  if (!banner) return;
-  banner.classList.toggle("win", Number(medals) > 0);
-  banner.classList.toggle("lose", Number(medals) <= 0);
-  banner.textContent = `${formatMedals(medals)} / ${Number(medals) > 0 ? "勝ち" : "負け"}`;
+function updateBatchResultBanner(row, medals) {
+  const resultCell = row?.querySelector(".batch-result-text");
+  if (!resultCell) return;
+  resultCell.classList.toggle("win", Number(medals) > 0);
+  resultCell.classList.toggle("lose", Number(medals) <= 0);
+  resultCell.textContent = Number(medals) > 0 ? "勝ち" : "負け";
 }
 
 function handleBatchClick(event) {
+  const deleteButton = event.target.closest("[data-batch-delete]");
+  if (deleteButton) {
+    const index = Number(deleteButton.dataset.batchDelete);
+    state.batchResults.splice(index, 1);
+    renderBatchResults();
+    setStatus(state.batchResults.length ? `${state.batchResults.length}件の読み取り結果を確認してください` : "読み取り結果を削除しました");
+    return;
+  }
+
   const button = event.target.closest("[data-batch-save]");
   if (!button) return;
   const index = Number(button.dataset.batchSave);
@@ -1347,6 +1501,7 @@ function createRecordFromBatchResult(result) {
     number: String(result.number || "").trim(),
     medals: Number.isFinite(medals) ? Math.round(medals) : 0,
     result: medals > 0 ? "勝ち" : "負け",
+    memo: String(result.memo || "").trim(),
     image: result.image,
     updatedAt: new Date().toISOString(),
   };
