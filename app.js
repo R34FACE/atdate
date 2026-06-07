@@ -56,6 +56,7 @@ const elements = {
   recordsExportCsvButton: $("recordsExportCsvButton"),
   recordsImportCsvInput: $("recordsImportCsvInput"),
   clearAllRecordsButton: $("clearAllRecordsButton"),
+  debugLog: $("debugLog"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -248,11 +249,25 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function debugLog(message, data = null) {
+  console.log(message, data);
+  const area = document.getElementById("debugLog");
+  if (!area) return;
+  const hasData = data !== null && data !== undefined;
+  const text = hasData ? `${message}: ${JSON.stringify(data, null, 2)}` : message;
+  area.textContent += `${new Date().toLocaleTimeString()} ${text}
+`;
+}
+
 async function handleScan(event) {
   event?.preventDefault?.();
+  setStatus("読み取り処理を開始しました");
+  debugLog("読み取りボタンが押された");
 
   try {
     const selectedFiles = Array.from(elements.imageInput.files || []).filter((file) => file.type.startsWith("image/"));
+    debugLog("imageInput.files の枚数", selectedFiles.length);
+    debugLog("state.selectedImages の枚数", state.selectedImages.length);
 
     if (!state.selectedImages.length && selectedFiles.length) {
       state.selectedImages = await Promise.all(selectedFiles.map(readFileAsDataUrl));
@@ -261,9 +276,12 @@ async function handleScan(event) {
         elements.previewImage.src = state.selectedImage;
         elements.previewImage.parentElement.classList.add("has-image");
       }
+      debugLog("imageInput.files から state.selectedImages を復元", state.selectedImages.length);
     }
 
     const images = state.selectedImages.length ? state.selectedImages : state.selectedImage ? [state.selectedImage] : [];
+    setStatus(`選択画像：${images.length}枚`);
+    debugLog("読み取り対象 images の枚数", images.length);
     if (!images.length) {
       setStatus("グラフ画像を選択してください");
       alert("グラフ画像を選択してください。");
@@ -275,48 +293,144 @@ async function handleScan(event) {
     hideBatchResults();
     setStatus(`読取中... 0/${images.length}`);
 
-    const results = [];
-    for (const [index, image] of images.entries()) {
-      try {
-        setStatus(`読取中... ${index + 1}/${images.length}`);
-        const scan = await scanSingleImage(image);
-        results.push(createBatchResult(image, scan, index));
-      } catch (error) {
-        console.error(`${index + 1}枚目の読み取り失敗`, error);
-        results.push(createBatchResult(image, { number: "", medals: 0 }, index));
-      }
+    const results = await readGraphImages(images);
+    if (!results.length) {
+      results.push(createBatchResult(state.selectedImage || images[0], createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), 0));
     }
 
-    const first = results[0];
-    fillConfirmFromScanResult(first);
+    fillConfirmFromScanResult(results[0]);
     state.batchResults = results;
     renderBatchResults();
     updateWinLoseBanner();
-    setStatus(images.length > 1 ? `${images.length}件の結果を確認してください` : "確認してください");
+
+    const statusMessage = getScanStatusMessage(results, images.length);
+    setStatus(statusMessage);
   } catch (error) {
     console.error("画像読み取りエラー:", error);
-    setStatus("読み取りエラーが発生しました。コンソールを確認してください。");
+    debugLog("エラー発生時の error.message", error?.message || String(error));
+    const fallback = createBatchResult(state.selectedImage || "", createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), 0);
+    fillConfirmFromScanResult(fallback);
+    updateWinLoseBanner();
+    setStatus("読み取りできませんでした。手動で入力してください。");
     alert("画像読み取り中にエラーが発生しました。画像形式やコードを確認してください。");
   }
 }
 
+async function readGraphImages(images) {
+  const results = [];
+  let resultIndex = 0;
+  for (const [imageIndex, image] of images.entries()) {
+    try {
+      setStatus(`読取中... ${imageIndex + 1}/${images.length}`);
+      debugLog("recognizeGraphDiffImage 開始", { imageIndex: imageIndex + 1 });
+      const scans = await recognizeGraphDiffImage(image, imageIndex);
+      debugLog("recognizeGraphDiffImage 結果", {
+        imageIndex: imageIndex + 1,
+        graphCount: scans.length,
+        scans: scans.map((scan) => ({ number: scan.number, medals: scan.medals, warnings: scan.warnings, rect: scan.rect })),
+      });
+      scans.forEach((scan) => {
+        results.push(createBatchResult(scan.image || image, scan, resultIndex));
+        resultIndex += 1;
+      });
+    } catch (error) {
+      console.error(`${imageIndex + 1}枚目の読み取り失敗`, error);
+      debugLog("エラー発生時の error.message", error?.message || String(error));
+      results.push(createBatchResult(image, createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), resultIndex));
+      resultIndex += 1;
+    }
+  }
+  return results;
+}
+
+async function recognizeGraphDiffImage(imageData, imageIndex = 0) {
+  const sourceCanvas = await imageDataToCanvas(imageData, 1400);
+  debugLog("recognizeGraphDiffImage canvas", { imageIndex: imageIndex + 1, width: sourceCanvas.width, height: sourceCanvas.height });
+  const graphRegions = detectGraphRegions(sourceCanvas);
+  debugLog("detectGraphRegions 結果", graphRegions);
+
+  if (!graphRegions.length) {
+    const warning = "グラフ領域を検出できませんでした。画像の背景・スクショ範囲が想定と違う可能性があります。";
+    setStatus(warning);
+    return [{ ...createFailedScanResult([warning]), image: imageData, sourceIndex: imageIndex + 1, regionIndex: 1 }];
+  }
+
+  const scans = [];
+  for (const [regionIndex, rect] of graphRegions.entries()) {
+    try {
+      debugLog("グラフ個別読み取り開始", { imageIndex: imageIndex + 1, regionIndex: regionIndex + 1, rect });
+      const previewCanvas = cropCanvas(sourceCanvas, expandRect(rect, sourceCanvas, { top: 42, right: 4, bottom: 4, left: 4 }), { padding: 0, fill: "white" });
+      const [unitResult, diffResult] = await Promise.all([
+        recognizeGraphUnitNumber(sourceCanvas, rect),
+        analyzeGraphDiff(sourceCanvas, rect),
+      ]);
+      const warnings = [...(unitResult.warnings || []), ...(diffResult.warnings || [])];
+      const failed = !unitResult.number || !Number.isFinite(diffResult.medals);
+      if (failed && !warnings.length) warnings.push("要確認：読み取り結果を手動で確認してください。");
+      scans.push({
+        number: unitResult.number || "",
+        numberCandidates: unitResult.candidates || [],
+        medals: Number.isFinite(diffResult.medals) ? diffResult.medals : 0,
+        warnings,
+        failed,
+        image: previewCanvas.toDataURL("image/png"),
+        rect,
+        sourceIndex: imageIndex + 1,
+        regionIndex: regionIndex + 1,
+      });
+      debugLog("グラフ個別読み取り結果", scans[scans.length - 1]);
+    } catch (error) {
+      debugLog("エラー発生時の error.message", error?.message || String(error));
+      scans.push({
+        ...createFailedScanResult(["要確認：このグラフの読み取りに失敗しました。手動入力してください。"]),
+        image: cropCanvas(sourceCanvas, rect, { padding: 0, fill: "white" }).toDataURL("image/png"),
+        rect,
+        sourceIndex: imageIndex + 1,
+        regionIndex: regionIndex + 1,
+      });
+    }
+  }
+  return scans;
+}
+
 async function scanSingleImage(imageData) {
-  const scanResult = await analyzeAtGraphImage(imageData);
-  const machineNumber = scanResult.number || (await readMachineNumber(imageData));
-  const estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : await estimateMedalsFromGraph(imageData);
-  return { number: machineNumber || "", medals: Number.isFinite(estimatedMedals) ? estimatedMedals : 0 };
+  const scans = await recognizeGraphDiffImage(imageData, 0);
+  return scans[0] || createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]);
+}
+
+function createFailedScanResult(warnings = []) {
+  return {
+    number: "",
+    numberCandidates: [],
+    medals: 0,
+    warnings,
+    failed: true,
+  };
+}
+
+function getScanStatusMessage(results, imageCount) {
+  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []));
+  if (warnings.length) return warnings.join(" / ");
+  const graphCount = results.length;
+  if (results.some((result) => result.failed)) return "読み取りできませんでした。手動で入力してください。";
+  return graphCount > 1 ? `${graphCount}件の結果を確認してください` : imageCount > 1 ? `${imageCount}枚の画像を確認してください` : "確認してください";
 }
 
 function createBatchResult(image, scan, index) {
   return {
     id: crypto.randomUUID(),
     image,
+    sourceIndex: scan.sourceIndex || null,
+    regionIndex: scan.regionIndex || index + 1,
     date: $("dateInput").value,
     shop: $("shopInput").value.trim(),
     tag: $("tagInput").value,
     machine: $("machineInput").value.trim(),
     number: scan.number || "",
     medals: Number.isFinite(scan.medals) ? Math.round(scan.medals) : 0,
+    warnings: scan.warnings || [],
+    numberCandidates: scan.numberCandidates || [],
+    failed: Boolean(scan.failed),
     saved: false,
     index: index + 1,
   };
@@ -337,45 +451,57 @@ function fillConfirmFromScanResult(result) {
   elements.estimatedMedals.textContent = formatMedals(result.medals);
 }
 
-async function readMachineNumber(imageData) {
+async function recognizeGraphUnitNumber(sourceCanvas, graphRect) {
   if (!window.Tesseract) {
-    return "";
+    const message = "台番号をOCRで読み取れませんでした。手動入力してください。";
+    debugLog("台番号OCR", "Tesseract が未読込");
+    setStatus(message);
+    return { number: "", candidates: [], warnings: [message] };
   }
 
+  const titleRect = expandRect(graphRect, sourceCanvas, {
+    top: Math.max(36, Math.round(graphRect.height * 0.22)),
+    right: 8,
+    bottom: -Math.max(2, Math.round(graphRect.height * 0.80)),
+    left: 8,
+  });
+  const fallbackTitleRect = expandRect(graphRect, sourceCanvas, { top: Math.max(48, Math.round(graphRect.height * 0.30)), right: 8, bottom: 0, left: 8 });
+  const cropped = cropCanvas(sourceCanvas, titleRect.bottom > titleRect.top ? titleRect : fallbackTitleRect, { padding: 8, fill: "white" });
+  const enhanced = enhanceCanvasForOcr(cropped);
+
   try {
-    const result = await window.Tesseract.recognize(imageData, "eng+jpn", {
-      logger: (message) => {
-        if (message.status === "recognizing text") {
-          setStatus(`OCR ${Math.round(message.progress * 100)}%`);
-        }
-      },
+    const result = await window.Tesseract.recognize(enhanced, "eng", {
+      tessedit_pageseg_mode: "6",
+      tessedit_char_whitelist: "[]0123456789台番No.- ",
     });
     const text = result.data.text || "";
-    const candidates = text.match(/\d{2,5}/g) || [];
-    if (!candidates.length) return "";
-    return candidates.sort((a, b) => scoreMachineNumber(b) - scoreMachineNumber(a))[0];
-  } catch {
-    return "";
+    const candidates = uniqueSorted(text.match(/\d{2,5}/g) || []).sort((a, b) => scoreMachineNumber(b) - scoreMachineNumber(a));
+    debugLog("台番号OCR結果", { text, candidates, graphRect });
+    if (!candidates.length) {
+      const message = "台番号をOCRで読み取れませんでした。手動入力してください。";
+      setStatus(message);
+      return { number: "", candidates: [], warnings: [message] };
+    }
+    return { number: candidates[0], candidates, warnings: [] };
+  } catch (error) {
+    const message = "台番号をOCRで読み取れませんでした。手動入力してください。";
+    debugLog("エラー発生時の error.message", error?.message || String(error));
+    setStatus(message);
+    return { number: "", candidates: [], warnings: [message] };
   }
 }
 
-async function analyzeAtGraphImage(imageData) {
-  try {
-    const sourceCanvas = await imageDataToCanvas(imageData, 1100);
-    const graphRect = detectAtGraphRegion(sourceCanvas) || {
-      left: Math.round(sourceCanvas.width * 0.08),
-      top: Math.round(sourceCanvas.height * 0.18),
-      right: Math.round(sourceCanvas.width * 0.95),
-      bottom: Math.round(sourceCanvas.height * 0.88),
-    };
-    const [number, medals] = await Promise.all([
-      recognizeAtGraphUnitNumber(sourceCanvas, graphRect),
-      estimateAtGraphMedals(sourceCanvas, graphRect),
-    ]);
-    return { number, medals };
-  } catch {
-    return { number: "", medals: Number.NaN };
-  }
+function readMachineNumber(imageData) {
+  return imageDataToCanvas(imageData, 1100).then((canvas) =>
+    recognizeGraphUnitNumber(canvas, {
+      left: 0,
+      top: Math.round(canvas.height * 0.18),
+      right: canvas.width - 1,
+      bottom: Math.round(canvas.height * 0.88),
+      width: canvas.width,
+      height: Math.round(canvas.height * 0.70),
+    }).then((result) => result.number)
+  );
 }
 
 function imageDataToCanvas(imageData, maxWidth = 1100) {
@@ -394,6 +520,412 @@ function imageDataToCanvas(imageData, maxWidth = 1100) {
     image.src = imageData;
   });
 }
+
+function detectGraphRegions(canvas) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const { width, height } = canvas;
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const mask = new Uint8Array(width * height);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      if (isGraphBackgroundPixel(data[index], data[index + 1], data[index + 2])) {
+        mask[y * width + x] = 1;
+      }
+    }
+  }
+
+  const components = detectMaskComponents(mask, width, height, { minPixels: 400, step: 2 });
+  const minWidth = Math.max(80, width * 0.12);
+  const minHeight = Math.max(70, height * 0.08);
+  const regions = components
+    .map((component) => normalizeRect(component, width, height))
+    .filter((rect) => rect.width >= minWidth && rect.height >= minHeight)
+    .filter((rect) => rect.width / rect.height >= 0.75 && rect.width / rect.height <= 8)
+    .map((rect) => trimGraphRegionToDarkBounds(rect, mask, width, height))
+    .flatMap((rect) => splitMergedGraphRegion(rect, mask, width, height))
+    .filter((rect) => rect.width >= minWidth && rect.height >= minHeight);
+
+  return mergeOverlappingRects(regions)
+    .sort((a, b) => a.top - b.top || a.left - b.left)
+    .map((rect) => expandRect(rect, canvas, { top: 0, right: 1, bottom: 1, left: 1 }));
+}
+
+function isGraphBackgroundPixel(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const luminance = r * 0.299 + g * 0.587 + b * 0.114;
+  return luminance < 70 && max - min < 45;
+}
+
+function detectMaskComponents(mask, width, height, options = {}) {
+  const minPixels = options.minPixels || 1;
+  const step = options.step || 1;
+  const visited = new Uint8Array(width * height);
+  const components = [];
+  const queue = [];
+
+  for (let startY = 0; startY < height; startY += step) {
+    for (let startX = 0; startX < width; startX += step) {
+      const startIndex = startY * width + startX;
+      if (!mask[startIndex] || visited[startIndex]) continue;
+
+      let left = startX;
+      let right = startX;
+      let top = startY;
+      let bottom = startY;
+      let pixels = 0;
+      queue.length = 0;
+      queue.push(startIndex);
+      visited[startIndex] = 1;
+
+      for (let cursor = 0; cursor < queue.length; cursor += 1) {
+        const index = queue[cursor];
+        const x = index % width;
+        const y = Math.floor(index / width);
+        pixels += 1;
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+
+        for (let dy = -step; dy <= step; dy += step) {
+          for (let dx = -step; dx <= step; dx += step) {
+            if (!dx && !dy) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const nextIndex = ny * width + nx;
+            if (!mask[nextIndex] || visited[nextIndex]) continue;
+            visited[nextIndex] = 1;
+            queue.push(nextIndex);
+          }
+        }
+      }
+
+      if (pixels >= minPixels) {
+        components.push({ left, right, top, bottom, pixels });
+      }
+    }
+  }
+  return components;
+}
+
+function normalizeRect(rect, maxWidth, maxHeight) {
+  const left = Math.max(0, Math.floor(rect.left));
+  const top = Math.max(0, Math.floor(rect.top));
+  const right = Math.min(maxWidth - 1, Math.ceil(rect.right));
+  const bottom = Math.min(maxHeight - 1, Math.ceil(rect.bottom));
+  return { left, top, right, bottom, width: right - left + 1, height: bottom - top + 1 };
+}
+
+function expandRect(rect, canvas, padding) {
+  const leftPad = typeof padding === "number" ? padding : padding.left || 0;
+  const rightPad = typeof padding === "number" ? padding : padding.right || 0;
+  const topPad = typeof padding === "number" ? padding : padding.top || 0;
+  const bottomPad = typeof padding === "number" ? padding : padding.bottom || 0;
+  return normalizeRect(
+    {
+      left: rect.left - leftPad,
+      right: rect.right + rightPad,
+      top: rect.top - topPad,
+      bottom: rect.bottom + bottomPad,
+    },
+    canvas.width,
+    canvas.height
+  );
+}
+
+
+function splitMergedGraphRegion(rect, mask, width, height) {
+  const xSegments = splitAxisByMaskGaps({
+    from: rect.left,
+    to: rect.right,
+    fixedFrom: rect.top,
+    fixedTo: rect.bottom,
+    minSegmentSize: Math.max(80, rect.width * 0.16),
+    gapThreshold: Math.max(4, rect.height * 0.10),
+    countAt: (position) => countMaskColumn(mask, width, position, rect.top, rect.bottom),
+  });
+  const splitByX = xSegments.map(([left, right]) => normalizeRect({ left, right, top: rect.top, bottom: rect.bottom }, width, height));
+  const splitByBothAxes = splitByX.flatMap((xRect) => {
+    const ySegments = splitAxisByMaskGaps({
+      from: xRect.top,
+      to: xRect.bottom,
+      fixedFrom: xRect.left,
+      fixedTo: xRect.right,
+      minSegmentSize: Math.max(70, xRect.height * 0.20),
+      gapThreshold: Math.max(4, xRect.width * 0.10),
+      countAt: (position) => countMaskRow(mask, width, position, xRect.left, xRect.right),
+    });
+    return ySegments.map(([top, bottom]) => normalizeRect({ left: xRect.left, right: xRect.right, top, bottom }, width, height));
+  });
+  return splitByBothAxes.length ? splitByBothAxes : [rect];
+}
+
+function splitAxisByMaskGaps({ from, to, minSegmentSize, gapThreshold, countAt }) {
+  const minGapSize = 8;
+  const segments = [];
+  let segmentStart = from;
+  let gapStart = null;
+
+  for (let position = from; position <= to; position += 1) {
+    const isGap = countAt(position) < gapThreshold;
+    if (isGap && gapStart === null) gapStart = position;
+    if (!isGap && gapStart !== null) {
+      const gapEnd = position - 1;
+      if (gapEnd - gapStart + 1 >= minGapSize) {
+        const segmentEnd = gapStart - 1;
+        if (segmentEnd - segmentStart + 1 >= minSegmentSize) segments.push([segmentStart, segmentEnd]);
+        segmentStart = position;
+      }
+      gapStart = null;
+    }
+  }
+
+  if (gapStart !== null && to - gapStart + 1 >= minGapSize) {
+    const segmentEnd = gapStart - 1;
+    if (segmentEnd - segmentStart + 1 >= minSegmentSize) segments.push([segmentStart, segmentEnd]);
+    segmentStart = to + 1;
+  }
+  if (to - segmentStart + 1 >= minSegmentSize) segments.push([segmentStart, to]);
+  return segments.length ? segments : [[from, to]];
+}
+
+function trimGraphRegionToDarkBounds(rect, mask, width, height) {
+  let left = rect.left;
+  let right = rect.right;
+  let top = rect.top;
+  let bottom = rect.bottom;
+  const columnThreshold = Math.max(6, rect.height * 0.20);
+  const rowThreshold = Math.max(6, rect.width * 0.20);
+
+  while (left < right && countMaskColumn(mask, width, left, top, bottom) < columnThreshold) left += 1;
+  while (right > left && countMaskColumn(mask, width, right, top, bottom) < columnThreshold) right -= 1;
+  while (top < bottom && countMaskRow(mask, width, top, left, right) < rowThreshold) top += 1;
+  while (bottom > top && countMaskRow(mask, width, bottom, left, right) < rowThreshold) bottom -= 1;
+  return normalizeRect({ left, right, top, bottom }, width, height);
+}
+
+function countMaskColumn(mask, width, x, top, bottom) {
+  let count = 0;
+  for (let y = top; y <= bottom; y += 1) count += mask[y * width + x] ? 1 : 0;
+  return count;
+}
+
+function countMaskRow(mask, width, y, left, right) {
+  let count = 0;
+  for (let x = left; x <= right; x += 1) count += mask[y * width + x] ? 1 : 0;
+  return count;
+}
+
+function mergeOverlappingRects(rects) {
+  const merged = [];
+  rects.forEach((rect) => {
+    const duplicate = merged.find((item) => rectOverlapRatio(item, rect) > 0.65);
+    if (!duplicate) {
+      merged.push({ ...rect });
+      return;
+    }
+    duplicate.left = Math.min(duplicate.left, rect.left);
+    duplicate.top = Math.min(duplicate.top, rect.top);
+    duplicate.right = Math.max(duplicate.right, rect.right);
+    duplicate.bottom = Math.max(duplicate.bottom, rect.bottom);
+    duplicate.width = duplicate.right - duplicate.left + 1;
+    duplicate.height = duplicate.bottom - duplicate.top + 1;
+  });
+  return merged;
+}
+
+function rectOverlapRatio(a, b) {
+  const left = Math.max(a.left, b.left);
+  const right = Math.min(a.right, b.right);
+  const top = Math.max(a.top, b.top);
+  const bottom = Math.min(a.bottom, b.bottom);
+  if (right <= left || bottom <= top) return 0;
+  const overlap = (right - left + 1) * (bottom - top + 1);
+  const smaller = Math.min(a.width * a.height, b.width * b.height);
+  return overlap / Math.max(1, smaller);
+}
+
+function analyzeGraphDiff(sourceCanvas, graphRect) {
+  const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
+  const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
+  const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
+  const yellowMask = buildYellowMask(imageData);
+  const yellowComponents = detectYellowComponents(yellowMask, graphCanvas.width, graphCanvas.height);
+  const textBlocks = detectYellowTextBlocks(yellowComponents, graphCanvas.width, graphCanvas.height);
+  const lineMask = removeYellowTextBlocksFromMask(yellowMask, graphCanvas.width, textBlocks);
+  const trace = buildYellowLineTrace(lineMask, graphCanvas.width, graphCanvas.height);
+  const segments = findYellowLineTraceSegments(trace, graphCanvas.width);
+  const endpoint = detectYellowEndpoint(segments, graphCanvas.width);
+  const zeroLineY = detectZeroLineY(imageData);
+
+  debugLog("analyzeGraphDiff", {
+    graphRect,
+    yellowComponents: yellowComponents.length,
+    yellowTextBlocks: textBlocks.length,
+    tracePoints: trace.filter(Boolean).length,
+    segments: segments.map((segment) => ({ startX: segment.startX, endX: segment.endX, length: segment.points.length })),
+    zeroLineY,
+    endpoint,
+  });
+
+  if (!endpoint) {
+    const message = "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
+    setStatus(message);
+    return { medals: Number.NaN, warnings: [message] };
+  }
+
+  const graphTop = Math.max(0, graphCanvas.height * 0.08);
+  const graphBottom = Math.min(graphCanvas.height - 1, graphCanvas.height * 0.92);
+  const baseZeroLine = Number.isFinite(zeroLineY) ? zeroLineY : graphCanvas.height * 0.5;
+  const span = Math.max(1, Math.max(baseZeroLine - graphTop, graphBottom - baseZeroLine));
+  const medals = Math.round(((baseZeroLine - endpoint.y) / span) * 5000 / 50) * 50;
+  debugLog("推定差枚", { medals, zeroLineY: baseZeroLine, endpoint });
+  return { medals, warnings: [] };
+}
+
+function buildYellowMask(imageData) {
+  const { data, width, height } = imageData;
+  const mask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      if (isAtGraphYellow(data[index], data[index + 1], data[index + 2])) mask[y * width + x] = 1;
+    }
+  }
+  return mask;
+}
+
+function detectYellowComponents(mask, width, height) {
+  return detectMaskComponents(mask, width, height, { minPixels: 3, step: 1 })
+    .map((component) => normalizeRect(component, width, height))
+    .map((rect) => ({ ...rect, pixels: countMaskPixels(mask, width, rect) }));
+}
+
+function countMaskPixels(mask, width, rect) {
+  let count = 0;
+  for (let y = rect.top; y <= rect.bottom; y += 1) {
+    for (let x = rect.left; x <= rect.right; x += 1) count += mask[y * width + x] ? 1 : 0;
+  }
+  return count;
+}
+
+function detectYellowTextBlocks(components, width, height) {
+  return components.filter((component) => {
+    if (isLikelyYellowLineComponent(component, width, height)) return false;
+    const inTextZone = component.left > width * 0.55 || component.top > height * 0.68 || component.bottom < height * 0.16;
+    const characterSized = component.width <= Math.max(40, width * 0.16) && component.height <= Math.max(34, height * 0.18);
+    return inTextZone && characterSized;
+  });
+}
+
+function removeYellowTextBlocksFromMask(mask, width, textBlocks) {
+  const cleaned = new Uint8Array(mask);
+  textBlocks.forEach((block) => {
+    for (let y = block.top; y <= block.bottom; y += 1) {
+      for (let x = block.left; x <= block.right; x += 1) cleaned[y * width + x] = 0;
+    }
+  });
+  return cleaned;
+}
+
+function isLikelyYellowLineComponent(component, width, height) {
+  const area = component.width * component.height;
+  const density = component.pixels / Math.max(1, area);
+  const longEnough = component.width >= width * 0.10 || component.height >= height * 0.12;
+  const notDenseText = density < 0.75 || component.width >= width * 0.18;
+  return longEnough && notDenseText;
+}
+
+function detectZeroLineY(imageData) {
+  const { data, width, height } = imageData;
+  let best = { y: null, count: 0 };
+  for (let y = Math.round(height * 0.20); y < Math.round(height * 0.80); y += 1) {
+    let count = 0;
+    for (let x = Math.round(width * 0.05); x < Math.round(width * 0.95); x += 1) {
+      const index = (y * width + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const isGrid = max - min < 28 && max >= 70 && max <= 220;
+      if (isGrid) count += 1;
+    }
+    if (count > best.count) best = { y, count };
+  }
+  return best.count > width * 0.12 ? best.y : height * 0.5;
+}
+
+function buildYellowLineTrace(mask, width, height) {
+  const trace = Array(width).fill(null);
+  for (let x = 0; x < width; x += 1) {
+    const ys = [];
+    for (let y = Math.round(height * 0.04); y < Math.round(height * 0.96); y += 1) {
+      if (mask[y * width + x]) ys.push(y);
+    }
+    if (!ys.length) continue;
+    ys.sort((a, b) => a - b);
+    trace[x] = { x, y: ys[Math.floor(ys.length / 2)], count: ys.length };
+  }
+  return trace;
+}
+
+function findYellowLineTraceSegments(trace, width) {
+  const segments = [];
+  let current = [];
+  let gap = 0;
+  const maxGap = Math.max(3, Math.round(width * 0.012));
+
+  trace.forEach((point, x) => {
+    if (point) {
+      if (current.length && Math.abs(point.y - current[current.length - 1].y) > 80) {
+        if (current.length >= 4) segments.push(segmentFromPoints(current));
+        current = [];
+      }
+      current.push(point);
+      gap = 0;
+      return;
+    }
+    if (!current.length) return;
+    gap += 1;
+    if (gap > maxGap) {
+      const trimmed = current.slice(0, Math.max(0, current.length - gap + 1));
+      if (trimmed.length >= 4) segments.push(segmentFromPoints(trimmed));
+      current = [];
+      gap = 0;
+    }
+  });
+
+  if (current.length >= 4) segments.push(segmentFromPoints(current));
+  return segments.filter((segment) => segment.points.length >= Math.max(4, width * 0.015));
+}
+
+function segmentFromPoints(points) {
+  return { startX: points[0].x, endX: points[points.length - 1].x, points };
+}
+
+function detectYellowEndpoint(segments, width) {
+  if (!segments.length) return null;
+  const rightmost = segments
+    .slice()
+    .sort((a, b) => b.endX - a.endX || b.points.length - a.points.length)[0];
+  return endpointFromTraceSegment(rightmost, width);
+}
+
+function endpointFromTraceSegment(segment, width) {
+  if (!segment?.points?.length) return null;
+  const tailWidth = Math.max(4, Math.round(width * 0.015));
+  const tail = segment.points.filter((point) => point.x >= segment.endX - tailWidth);
+  const usable = tail.length ? tail : segment.points.slice(-5);
+  const averageY = usable.reduce((sum, point) => sum + point.y, 0) / usable.length;
+  return { x: segment.endX, y: averageY };
+}
+
 
 function detectAtGraphRegion(canvas) {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -463,14 +995,28 @@ function estimateAtGraphMedals(sourceCanvas, graphRect) {
   const { width, height } = graphCanvas;
   const imageData = ctx.getImageData(0, 0, width, height);
   const points = collectAtGraphLinePoints(imageData);
-  if (!points.length) return Number.NaN;
+  debugLog("collectAtGraphLinePoints の点数", points.length);
+  const minPointCount = Math.max(20, Math.round(width * 0.02));
+  if (points.length < minPointCount) {
+    const message = "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
+    setStatus(message);
+    debugLog(message, { points: points.length, minPointCount });
+    debugLog("推定した zeroLineY", null);
+    debugLog("推定した endPoint", null);
+    debugLog("推定差枚", null);
+    return { medals: Number.NaN, warnings: [message] };
+  }
 
   const endPoint = pickAtGraphEndpoint(points, width);
   const zeroLineY = detectAtGraphZeroLine(imageData) ?? height * 0.5;
   const graphTop = Math.max(0, height * 0.08);
   const graphBottom = Math.min(height - 1, height * 0.92);
   const span = Math.max(1, Math.max(zeroLineY - graphTop, graphBottom - zeroLineY));
-  return Math.round(((zeroLineY - endPoint.y) / span) * 5000 / 50) * 50;
+  const medals = Math.round(((zeroLineY - endPoint.y) / span) * 5000 / 50) * 50;
+  debugLog("推定した zeroLineY", zeroLineY);
+  debugLog("推定した endPoint", endPoint);
+  debugLog("推定差枚", medals);
+  return { medals, warnings: [] };
 }
 
 function collectAtGraphLinePoints(imageData) {
@@ -621,6 +1167,15 @@ function findGraphEndPoint(data, width, height) {
 }
 
 
+function renderBatchWarnings(result) {
+  const messages = [...(result.warnings || [])];
+  if (result.numberCandidates?.length > 1) {
+    messages.push(`台番号候補：${result.numberCandidates.join(" / ")}`);
+  }
+  if (!messages.length) return "";
+  return `<div class="wide batch-warning">${messages.map(escapeHtml).join("<br />")}</div>`;
+}
+
 function hideBatchResults() {
   state.batchResults = state.batchResults.filter(Boolean);
   elements.batchPanel.hidden = true;
@@ -642,7 +1197,7 @@ function renderBatchResults() {
         <article class="batch-card ${result.saved ? "saved" : ""}">
           <div class="batch-image-wrap">
             <img class="batch-thumb" src="${result.image}" alt="読み取り画像 ${index + 1}" />
-            <span class="status-pill">${result.saved ? "登録済み" : `${index + 1}枚目`}</span>
+            <span class="status-pill">${result.saved ? "登録済み" : result.failed ? "要確認" : `${index + 1}件目`}</span>
           </div>
           <div class="batch-form form-grid">
             <label>
@@ -674,6 +1229,7 @@ function renderBatchResults() {
             <div class="wide batch-result-banner result-banner ${resultClass}">
               ${formatMedals(result.medals)} / ${Number(result.medals) > 0 ? "勝ち" : "負け"}
             </div>
+            ${renderBatchWarnings(result)}
             <div class="wide button-row">
               <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
             </div>
@@ -719,8 +1275,12 @@ function handleBatchClick(event) {
 function saveBatchResult(index) {
   const result = state.batchResults[index];
   if (!result) return false;
-  if (!validateBatchResult(result)) {
-    alert(`${index + 1}件目の必須項目（日付・店舗名・機種名・台番号・差枚）を確認してください。`);
+  const missing = getBatchResultMissingFields(result);
+  if (missing.length) {
+    const message = `${index + 1}件目の不足項目：${missing.join("、")}`;
+    result.warnings = uniqueSorted([...(result.warnings || []), message]);
+    renderBatchResults();
+    alert(message);
     return false;
   }
   const record = createRecordFromBatchResult(result);
@@ -733,22 +1293,47 @@ function saveBatchResult(index) {
 
 function saveAllBatchResults() {
   if (!state.batchResults.length) return;
+  const skipped = [];
+  let savedCount = 0;
+
   for (let index = 0; index < state.batchResults.length; index += 1) {
-    if (state.batchResults[index].saved) continue;
-    if (!saveBatchResult(index)) return;
+    const result = state.batchResults[index];
+    if (result.saved) continue;
+    const missing = getBatchResultMissingFields(result);
+    if (missing.length) {
+      const message = `${index + 1}件目の不足項目：${missing.join("、")}`;
+      result.warnings = uniqueSorted([...(result.warnings || []), message]);
+      skipped.push(message);
+      continue;
+    }
+    const record = createRecordFromBatchResult(result);
+    saveRecord(record);
+    result.saved = true;
+    savedCount += 1;
   }
-  setStatus(`${state.batchResults.length}件を登録しました`);
+
+  renderBatchResults();
+  renderAll();
+  if (skipped.length) {
+    setStatus(`${savedCount}件を登録、${skipped.length}件は不足項目のため未登録です`);
+    alert(`未登録の結果があります。\n${skipped.join("\n")}`);
+    return;
+  }
+  setStatus(`${savedCount}件を登録しました`);
 }
 
 function validateBatchResult(result) {
-  return Boolean(
-    result.date &&
-      String(result.shop || "").trim() &&
-      String(result.machine || "").trim() &&
-      String(result.number || "").trim() &&
-      String(result.medals ?? "").trim() !== "" &&
-      Number.isFinite(Number(result.medals))
-  );
+  return getBatchResultMissingFields(result).length === 0;
+}
+
+function getBatchResultMissingFields(result) {
+  const missing = [];
+  if (!result.date) missing.push("日付");
+  if (!String(result.shop || "").trim()) missing.push("店舗名");
+  if (!String(result.machine || "").trim()) missing.push("機種名");
+  if (!String(result.number || "").trim()) missing.push("台番号");
+  if (String(result.medals ?? "").trim() === "" || !Number.isFinite(Number(result.medals))) missing.push("差枚");
+  return missing;
 }
 
 function createRecordFromBatchResult(result) {
