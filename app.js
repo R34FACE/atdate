@@ -56,6 +56,7 @@ const elements = {
   recordsExportCsvButton: $("recordsExportCsvButton"),
   recordsImportCsvInput: $("recordsImportCsvInput"),
   clearAllRecordsButton: $("clearAllRecordsButton"),
+  debugLog: $("debugLog"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -248,11 +249,25 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function debugLog(message, data = null) {
+  console.log(message, data);
+  const area = document.getElementById("debugLog");
+  if (!area) return;
+  const hasData = data !== null && data !== undefined;
+  const text = hasData ? `${message}: ${JSON.stringify(data, null, 2)}` : message;
+  area.textContent += `${new Date().toLocaleTimeString()} ${text}
+`;
+}
+
 async function handleScan(event) {
   event?.preventDefault?.();
+  setStatus("読み取り処理を開始しました");
+  debugLog("読み取りボタンが押された");
 
   try {
     const selectedFiles = Array.from(elements.imageInput.files || []).filter((file) => file.type.startsWith("image/"));
+    debugLog("imageInput.files の枚数", selectedFiles.length);
+    debugLog("state.selectedImages の枚数", state.selectedImages.length);
 
     if (!state.selectedImages.length && selectedFiles.length) {
       state.selectedImages = await Promise.all(selectedFiles.map(readFileAsDataUrl));
@@ -261,9 +276,12 @@ async function handleScan(event) {
         elements.previewImage.src = state.selectedImage;
         elements.previewImage.parentElement.classList.add("has-image");
       }
+      debugLog("imageInput.files から state.selectedImages を復元", state.selectedImages.length);
     }
 
     const images = state.selectedImages.length ? state.selectedImages : state.selectedImage ? [state.selectedImage] : [];
+    setStatus(`選択画像：${images.length}枚`);
+    debugLog("読み取り対象 images の枚数", images.length);
     if (!images.length) {
       setStatus("グラフ画像を選択してください");
       alert("グラフ画像を選択してください。");
@@ -279,11 +297,14 @@ async function handleScan(event) {
     for (const [index, image] of images.entries()) {
       try {
         setStatus(`読取中... ${index + 1}/${images.length}`);
+        debugLog("scanSingleImage 開始", { index: index + 1 });
         const scan = await scanSingleImage(image);
+        debugLog("scanSingleImage 結果", { index: index + 1, scan });
         results.push(createBatchResult(image, scan, index));
       } catch (error) {
         console.error(`${index + 1}枚目の読み取り失敗`, error);
-        results.push(createBatchResult(image, { number: "", medals: 0 }, index));
+        debugLog("エラー発生時の error.message", error?.message || String(error));
+        results.push(createBatchResult(image, createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), index));
       }
     }
 
@@ -292,19 +313,60 @@ async function handleScan(event) {
     state.batchResults = results;
     renderBatchResults();
     updateWinLoseBanner();
-    setStatus(images.length > 1 ? `${images.length}件の結果を確認してください` : "確認してください");
+
+    const statusMessage = getScanStatusMessage(results, images.length);
+    setStatus(statusMessage);
   } catch (error) {
     console.error("画像読み取りエラー:", error);
-    setStatus("読み取りエラーが発生しました。コンソールを確認してください。");
+    debugLog("エラー発生時の error.message", error?.message || String(error));
+    const fallback = createBatchResult(state.selectedImage || "", createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), 0);
+    fillConfirmFromScanResult(fallback);
+    updateWinLoseBanner();
+    setStatus("読み取りできませんでした。手動で入力してください。");
     alert("画像読み取り中にエラーが発生しました。画像形式やコードを確認してください。");
   }
 }
 
 async function scanSingleImage(imageData) {
   const scanResult = await analyzeAtGraphImage(imageData);
-  const machineNumber = scanResult.number || (await readMachineNumber(imageData));
-  const estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : await estimateMedalsFromGraph(imageData);
-  return { number: machineNumber || "", medals: Number.isFinite(estimatedMedals) ? estimatedMedals : 0 };
+  const warnings = [...(scanResult.warnings || [])];
+  let machineNumber = scanResult.number || "";
+
+  if (!machineNumber) {
+    machineNumber = await readMachineNumber(imageData);
+    if (!machineNumber) {
+      warnings.push("台番号をOCRで読み取れませんでした。手動入力してください。");
+    }
+  }
+
+  let estimatedMedals = Number.isFinite(scanResult.medals) ? scanResult.medals : Number.NaN;
+  if (!Number.isFinite(estimatedMedals)) {
+    estimatedMedals = await estimateMedalsFromGraph(imageData);
+  }
+
+  const medals = Number.isFinite(estimatedMedals) ? estimatedMedals : 0;
+  const failed = !machineNumber && (!Number.isFinite(scanResult.medals) || medals === 0);
+  if (failed && !warnings.includes("読み取りできませんでした。手動で入力してください。")) {
+    warnings.push("読み取りできませんでした。手動で入力してください。");
+  }
+
+  return { number: machineNumber || "", medals, warnings, failed };
+}
+
+function createFailedScanResult(warnings = []) {
+  return {
+    number: "",
+    medals: 0,
+    warnings,
+    failed: true,
+  };
+}
+
+function getScanStatusMessage(results, imageCount) {
+  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []));
+  if (warnings.length) return warnings.join(" / ");
+  if (results.some((result) => result.failed)) return "読み取りできませんでした。手動で入力してください。";
+  return imageCount > 1 ? `${imageCount}件の結果を確認してください` : "確認してください";
 }
 
 function createBatchResult(image, scan, index) {
@@ -317,6 +379,8 @@ function createBatchResult(image, scan, index) {
     machine: $("machineInput").value.trim(),
     number: scan.number || "",
     medals: Number.isFinite(scan.medals) ? Math.round(scan.medals) : 0,
+    warnings: scan.warnings || [],
+    failed: Boolean(scan.failed),
     saved: false,
     index: index + 1,
   };
@@ -339,6 +403,8 @@ function fillConfirmFromScanResult(result) {
 
 async function readMachineNumber(imageData) {
   if (!window.Tesseract) {
+    debugLog("台番号OCR", "Tesseract が未読込");
+    setStatus("台番号をOCRで読み取れませんでした。手動入力してください。");
     return "";
   }
 
@@ -352,9 +418,15 @@ async function readMachineNumber(imageData) {
     });
     const text = result.data.text || "";
     const candidates = text.match(/\d{2,5}/g) || [];
-    if (!candidates.length) return "";
+    debugLog("台番号OCR結果", { text, candidates });
+    if (!candidates.length) {
+      setStatus("台番号をOCRで読み取れませんでした。手動入力してください。");
+      return "";
+    }
     return candidates.sort((a, b) => scoreMachineNumber(b) - scoreMachineNumber(a))[0];
-  } catch {
+  } catch (error) {
+    debugLog("エラー発生時の error.message", error?.message || String(error));
+    setStatus("台番号をOCRで読み取れませんでした。手動入力してください。");
     return "";
   }
 }
@@ -362,19 +434,23 @@ async function readMachineNumber(imageData) {
 async function analyzeAtGraphImage(imageData) {
   try {
     const sourceCanvas = await imageDataToCanvas(imageData, 1100);
-    const graphRect = detectAtGraphRegion(sourceCanvas) || {
+    debugLog("analyzeAtGraphImage canvas の幅・高さ", { width: sourceCanvas.width, height: sourceCanvas.height });
+    const detectedRect = detectAtGraphRegion(sourceCanvas);
+    debugLog("detectAtGraphRegion の結果", detectedRect);
+    const graphRect = detectedRect || {
       left: Math.round(sourceCanvas.width * 0.08),
       top: Math.round(sourceCanvas.height * 0.18),
       right: Math.round(sourceCanvas.width * 0.95),
       bottom: Math.round(sourceCanvas.height * 0.88),
     };
-    const [number, medals] = await Promise.all([
+    const [number, medalResult] = await Promise.all([
       recognizeAtGraphUnitNumber(sourceCanvas, graphRect),
       estimateAtGraphMedals(sourceCanvas, graphRect),
     ]);
-    return { number, medals };
-  } catch {
-    return { number: "", medals: Number.NaN };
+    return { number, medals: medalResult.medals, warnings: medalResult.warnings || [] };
+  } catch (error) {
+    debugLog("エラー発生時の error.message", error?.message || String(error));
+    return { number: "", medals: Number.NaN, warnings: ["読み取りできませんでした。手動で入力してください。"] };
   }
 }
 
@@ -463,14 +539,28 @@ function estimateAtGraphMedals(sourceCanvas, graphRect) {
   const { width, height } = graphCanvas;
   const imageData = ctx.getImageData(0, 0, width, height);
   const points = collectAtGraphLinePoints(imageData);
-  if (!points.length) return Number.NaN;
+  debugLog("collectAtGraphLinePoints の点数", points.length);
+  const minPointCount = Math.max(20, Math.round(width * 0.02));
+  if (points.length < minPointCount) {
+    const message = "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
+    setStatus(message);
+    debugLog(message, { points: points.length, minPointCount });
+    debugLog("推定した zeroLineY", null);
+    debugLog("推定した endPoint", null);
+    debugLog("推定差枚", null);
+    return { medals: Number.NaN, warnings: [message] };
+  }
 
   const endPoint = pickAtGraphEndpoint(points, width);
   const zeroLineY = detectAtGraphZeroLine(imageData) ?? height * 0.5;
   const graphTop = Math.max(0, height * 0.08);
   const graphBottom = Math.min(height - 1, height * 0.92);
   const span = Math.max(1, Math.max(zeroLineY - graphTop, graphBottom - zeroLineY));
-  return Math.round(((zeroLineY - endPoint.y) / span) * 5000 / 50) * 50;
+  const medals = Math.round(((zeroLineY - endPoint.y) / span) * 5000 / 50) * 50;
+  debugLog("推定した zeroLineY", zeroLineY);
+  debugLog("推定した endPoint", endPoint);
+  debugLog("推定差枚", medals);
+  return { medals, warnings: [] };
 }
 
 function collectAtGraphLinePoints(imageData) {
@@ -621,6 +711,11 @@ function findGraphEndPoint(data, width, height) {
 }
 
 
+function renderBatchWarnings(result) {
+  if (!result.warnings?.length) return "";
+  return `<div class="wide batch-warning">${result.warnings.map(escapeHtml).join("<br />")}</div>`;
+}
+
 function hideBatchResults() {
   state.batchResults = state.batchResults.filter(Boolean);
   elements.batchPanel.hidden = true;
@@ -674,6 +769,7 @@ function renderBatchResults() {
             <div class="wide batch-result-banner result-banner ${resultClass}">
               ${formatMedals(result.medals)} / ${Number(result.medals) > 0 ? "勝ち" : "負け"}
             </div>
+            ${renderBatchWarnings(result)}
             <div class="wide button-row">
               <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
             </div>
