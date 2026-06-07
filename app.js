@@ -75,6 +75,10 @@ function bindEvents() {
   elements.recordForm.addEventListener("submit", handleSaveRecord);
   $("confirmMedalsInput").addEventListener("input", updateWinLoseBanner);
   elements.clearImageButton.addEventListener("click", clearImage);
+  [$("dateInput"), $("shopInput"), $("tagInput"), $("machineInput")].forEach((input) => {
+    input.addEventListener("input", applyScanDefaultsToBatchResults);
+    input.addEventListener("change", applyScanDefaultsToBatchResults);
+  });
   elements.bulkRegisterButton.addEventListener("click", saveAllBatchResults);
   elements.batchResults.addEventListener("input", handleBatchInput);
   elements.batchResults.addEventListener("change", handleBatchInput);
@@ -250,13 +254,12 @@ function readFileAsDataUrl(file) {
 }
 
 function debugLog(message, data = null) {
-  console.log(message, data);
-  const area = document.getElementById("debugLog");
-  if (!area) return;
-  const hasData = data !== null && data !== undefined;
-  const text = hasData ? `${message}: ${JSON.stringify(data, null, 2)}` : message;
-  area.textContent += `${new Date().toLocaleTimeString()} ${text}
-`;
+  if (localStorage.getItem("atSlotDebug") !== "1") return;
+  if (data === null || data === undefined) {
+    console.debug(message);
+    return;
+  }
+  console.debug(message, data);
 }
 
 async function handleScan(event) {
@@ -440,10 +443,7 @@ function createBatchResult(image, scan, index) {
     image,
     sourceIndex: scan.sourceIndex || null,
     regionIndex: scan.regionIndex || index + 1,
-    date: $("dateInput").value,
-    shop: $("shopInput").value.trim(),
-    tag: $("tagInput").value,
-    machine: $("machineInput").value.trim(),
+    ...getScanDefaults(),
     number: scan.number || "",
     medals: Number.isFinite(scan.medals) ? Math.round(scan.medals) : 0,
     memo: scan.memo || (scan.warnings || []).join(" / "),
@@ -1306,13 +1306,29 @@ function findGraphEndPoint(data, width, height) {
 }
 
 
+function applyScanDefaultsToBatchResults() {
+  if (!state.batchResults.length) return;
+  const defaults = getScanDefaults();
+  state.batchResults = state.batchResults.map((result) => ({ ...result, ...defaults, saved: false }));
+  renderBatchResults();
+}
+
+function getScanDefaults() {
+  return {
+    date: $("dateInput").value,
+    shop: $("shopInput").value.trim(),
+    tag: $("tagInput").value,
+    machine: $("machineInput").value.trim(),
+  };
+}
+
 function renderBatchWarnings(result) {
   const messages = [...(result.warnings || [])];
   if (result.numberCandidates?.length > 1) {
     messages.push(`台番号候補：${result.numberCandidates.join(" / ")}`);
   }
   if (!messages.length) return "";
-  return messages.map(escapeHtml).join(" / ");
+  return messages.join(" / ");
 }
 
 function hideBatchResults() {
@@ -1334,6 +1350,7 @@ function renderBatchResults() {
       <table class="batch-table">
         <thead>
           <tr>
+            <th>グラフ</th>
             <th>状態</th>
             <th>日付</th>
             <th>店舗名</th>
@@ -1361,6 +1378,7 @@ function renderBatchResultRow(result, index) {
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
     <tr class="batch-row ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}">
+      <td class="batch-graph-cell"><img class="batch-graph-thumb" src="${escapeHtml(result.image)}" alt="読み取りグラフ ${index + 1}" /></td>
       <td><span class="status-pill">${escapeHtml(status)}</span></td>
       <td><input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required /></td>
       <td><input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required /></td>
@@ -1509,8 +1527,10 @@ function createRecordFromBatchResult(result) {
 
 function createRecordFromConfirmForm() {
   const medalValue = Number($("confirmMedalsInput").value);
+  const editingId = elements.editingIdInput.value;
+  const existing = state.records.find((record) => record.id === editingId);
   return {
-    id: elements.editingIdInput.value || crypto.randomUUID(),
+    id: editingId || crypto.randomUUID(),
     date: $("confirmDateInput").value,
     shop: $("confirmShopInput").value.trim(),
     tag: $("confirmTagInput").value,
@@ -1518,6 +1538,7 @@ function createRecordFromConfirmForm() {
     number: $("confirmNumberInput").value.trim(),
     medals: Number.isFinite(medalValue) ? Math.round(medalValue) : 0,
     result: medalValue > 0 ? "勝ち" : "負け",
+    memo: existing?.memo || "",
     image: state.selectedImage,
     updatedAt: new Date().toISOString(),
   };
@@ -1643,7 +1664,7 @@ function renderRecords() {
   });
 
   if (!filtered.length) {
-    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="8">登録データがありません</td></tr>`;
+    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="9">登録データがありません</td></tr>`;
     return;
   }
 
@@ -1658,6 +1679,7 @@ function renderRecords() {
           <td class="number-cell">${escapeHtml(record.number)}</td>
           <td class="number-cell medals-cell ${record.medals > 0 ? "win-text" : "lose-text"}">${formatMedals(record.medals)}</td>
           <td class="${record.medals > 0 ? "win-text" : "lose-text"}">${record.medals > 0 ? "勝ち" : "負け"}</td>
+          <td>${escapeHtml(record.memo || "")}</td>
           <td>
             <div class="row-actions">
               <button class="small-button" type="button" data-edit="${record.id}">編集</button>
@@ -1860,7 +1882,7 @@ function clearAllRecords() {
 }
 
 function exportCsv() {
-  const headers = ["日付", "店舗名", "特日タグ", "機種名", "台番号", "差枚", "勝敗", "画像"];
+  const headers = ["日付", "店舗名", "特日タグ", "機種名", "台番号", "差枚", "勝敗", "メモ", "画像"];
   const rows = state.records.map((record) => [
     record.date,
     record.shop,
@@ -1869,6 +1891,7 @@ function exportCsv() {
     record.number,
     record.medals,
     record.medals > 0 ? "勝ち" : "負け",
+    record.memo || "",
     record.image || "",
   ]);
   const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
@@ -1887,6 +1910,8 @@ function importCsv(event) {
   const reader = new FileReader();
   reader.onload = () => {
     const rows = parseCsv(String(reader.result).replace(/^\ufeff/, ""));
+    const headers = rows[0] || [];
+    const hasMemoColumn = headers.includes("メモ");
     const imported = rows.slice(1).map((row) => {
       const medals = Number(row[5]) || 0;
       return {
@@ -1898,7 +1923,8 @@ function importCsv(event) {
         number: row[4] || "",
         medals,
         result: medals > 0 ? "勝ち" : "負け",
-        image: row[7] || "",
+        memo: hasMemoColumn ? row[7] || "" : "",
+        image: hasMemoColumn ? row[8] || "" : row[7] || "",
         updatedAt: new Date().toISOString(),
       };
     }).filter((record) => record.date || record.shop || record.machine || record.number);

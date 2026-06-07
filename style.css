@@ -689,33 +689,6 @@ button:disabled {
   }
 }
 
-.debug-panel {
-  margin: 0 18px 18px;
-}
-
-.debug-panel summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.debug-log {
-  min-height: 90px;
-  max-height: 220px;
-  overflow: auto;
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  color: #dff5f0;
-  background: #172026;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-
 .batch-warning {
   border: 1px solid #f4c7a1;
   border-radius: 6px;
@@ -774,4 +747,35 @@ button:disabled {
 
 .batch-result-text.lose {
   color: var(--lose);
+}
+
+
+.batch-graph-cell {
+  width: 180px;
+  min-width: 160px;
+}
+
+.batch-graph-thumb {
+  display: block;
+  width: 160px;
+  max-height: 120px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  object-fit: contain;
+  background: #0f1418;
+}
+
+@media (max-width: 760px) {
+  .batch-table {
+    min-width: 900px;
+  }
+
+  .batch-graph-cell {
+    min-width: 132px;
+  }
+
+  .batch-graph-thumb {
+    width: 128px;
+    max-height: 96px;
+  }
 }
