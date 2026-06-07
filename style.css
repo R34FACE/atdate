@@ -688,3 +688,35 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.debug-panel {
+  display: grid;
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+
+.debug-log {
+  min-height: 140px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  color: #dff5f0;
+  background: #172026;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.batch-warning {
+  border: 1px solid #f4c7a1;
+  border-radius: 6px;
+  padding: 10px;
+  color: #8a3a09;
+  background: #fff4e8;
+  font-size: 13px;
+  font-weight: 700;
+}
