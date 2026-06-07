@@ -688,3 +688,90 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.debug-panel {
+  margin: 0 18px 18px;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.debug-log {
+  min-height: 90px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  color: #dff5f0;
+  background: #172026;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.batch-warning {
+  border: 1px solid #f4c7a1;
+  border-radius: 6px;
+  padding: 10px;
+  color: #8a3a09;
+  background: #fff4e8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.batch-table-wrap {
+  padding: 0;
+}
+
+.batch-table {
+  min-width: 980px;
+}
+
+.batch-table th,
+.batch-table td {
+  vertical-align: top;
+}
+
+.batch-table input,
+.batch-table select,
+.batch-table textarea {
+  min-width: 120px;
+  min-height: 36px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.batch-table textarea {
+  width: 220px;
+  resize: vertical;
+}
+
+.batch-row.saved {
+  background: #f0fbf8;
+}
+
+.batch-row.needs-review {
+  background: #fff8ed;
+}
+
+.batch-result-text {
+  min-width: 54px;
+  padding-top: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.batch-result-text.win {
+  color: var(--win);
+}
+
+.batch-result-text.lose {
+  color: var(--lose);
+}
