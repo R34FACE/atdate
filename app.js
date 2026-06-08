@@ -301,8 +301,8 @@ async function handleScan(event) {
       results.push(createBatchResult(state.selectedImage || images[0], createFailedScanResult(["読み取りできませんでした。手動で入力してください。"]), 0));
     }
 
-    fillConfirmFromScanResult(results[0]);
-    state.batchResults = results;
+    state.batchResults = sortBatchResults(results);
+    fillConfirmFromScanResult(state.batchResults[0]);
     renderBatchResults();
     updateWinLoseBanner();
 
@@ -405,7 +405,7 @@ async function scanSingleImage(imageData) {
 }
 
 function buildScanMemo(unitResult, diffResult, warnings = []) {
-  const messages = [];
+  const messages = diffResult.memo ? [diffResult.memo] : [];
   if (!unitResult.number && !Number.isFinite(diffResult.medals)) {
     messages.push("読み取り失敗");
   } else {
@@ -435,6 +435,23 @@ function getScanStatusMessage(results, imageCount) {
   const graphCount = results.length;
   if (results.some((result) => result.failed)) return "読み取りできませんでした。手動で入力してください。";
   return graphCount > 1 ? `${graphCount}件の結果を確認してください` : imageCount > 1 ? `${imageCount}枚の画像を確認してください` : "確認してください";
+}
+
+function sortBatchResults(results) {
+  return results
+    .map((result, originalIndex) => ({ result, originalIndex }))
+    .sort((a, b) => {
+      const numberA = sortableMachineNumber(a.result.number);
+      const numberB = sortableMachineNumber(b.result.number);
+      if (numberA !== numberB) return numberA - numberB;
+      return (a.result.sourceIndex || 0) - (b.result.sourceIndex || 0) || (a.result.regionIndex || 0) - (b.result.regionIndex || 0) || a.originalIndex - b.originalIndex;
+    })
+    .map(({ result }, index) => ({ ...result, index: index + 1 }));
+}
+
+function sortableMachineNumber(value) {
+  const match = String(value || "").match(/\d+/);
+  return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
 }
 
 function createBatchResult(image, scan, index) {
@@ -821,7 +838,7 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
     setStatus(warnings[0]);
     return { medals: Number.NaN, warnings: uniqueSorted(warnings) };
   }
-  return { medals, warnings: textBlocks.length ? ["数字除外済み"] : [] };
+  return { medals, warnings: textBlocks.length ? ["数字除外済み"] : [], memo: textBlocks.length ? "最右連続区間採用 / 数字除外済み" : "最右連続区間採用" };
 }
 
 function buildYellowMask(imageData) {
@@ -1345,61 +1362,95 @@ function renderBatchResults() {
   }
 
   elements.batchPanel.hidden = false;
+  state.batchResults = sortBatchResults(state.batchResults);
   elements.batchResults.innerHTML = `
-    <div class="table-wrap batch-table-wrap">
-      <table class="batch-table">
-        <thead>
-          <tr>
-            <th>グラフ</th>
-            <th>状態</th>
-            <th>日付</th>
-            <th>店舗名</th>
-            <th>特日タグ</th>
-            <th>機種名</th>
-            <th>台番号</th>
-            <th>差枚</th>
-            <th>勝敗</th>
-            <th>メモ</th>
-            <th>削除</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${state.batchResults.map(renderBatchResultRow).join("")}
-        </tbody>
-      </table>
+    <div class="batch-card-list">
+      ${state.batchResults.map(renderBatchResultCard).join("")}
     </div>
   `;
 }
 
-function renderBatchResultRow(result, index) {
+function renderBatchResultCard(result, index) {
   const resultClass = Number(result.medals) > 0 ? "win" : "lose";
   const status = result.saved ? "登録済み" : result.failed ? "要確認" : "未登録";
   const warningText = renderBatchWarnings(result);
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
-    <tr class="batch-row ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}">
-      <td class="batch-graph-cell"><img class="batch-graph-thumb" src="${escapeHtml(result.image)}" alt="読み取りグラフ ${index + 1}" /></td>
-      <td><span class="status-pill">${escapeHtml(status)}</span></td>
-      <td><input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required /></td>
-      <td><input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required /></td>
-      <td>
-        <select data-batch-index="${index}" data-batch-field="tag" required>
-          ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
-        </select>
-      </td>
-      <td><input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required /></td>
-      <td><input type="text" inputmode="numeric" data-batch-index="${index}" data-batch-field="number" value="${escapeHtml(result.number)}" placeholder="手動入力" required /></td>
-      <td><input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="要確認" required /></td>
-      <td class="batch-result-text ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</td>
-      <td><textarea data-batch-index="${index}" data-batch-field="memo" rows="2" placeholder="要確認メモ">${escapeHtml(memo)}</textarea></td>
-      <td>
-        <div class="row-actions">
-          <button class="small-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>登録</button>
-          <button class="small-button delete" type="button" data-batch-delete="${index}">削除</button>
+    <article class="batch-card ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}" data-batch-card="${index}">
+      <header class="batch-card-head">
+        <div>
+          <p class="batch-card-kicker">${escapeHtml(status)}</p>
+          <h3 class="batch-card-title ${getBatchHeadingClass(result)}">${escapeHtml(formatBatchHeading(result))}</h3>
         </div>
-      </td>
-    </tr>
+        <button class="small-button delete" type="button" data-batch-delete="${index}">削除</button>
+      </header>
+      <div class="batch-card-body">
+        <figure class="batch-graph-preview">
+          <img class="batch-graph-image" src="${escapeHtml(result.image)}" alt="読み取りグラフ ${index + 1}" />
+        </figure>
+        <div class="batch-card-fields">
+          <p class="batch-memo-preview">${escapeHtml(memo || "メモなし")}</p>
+          <div class="batch-field-grid">
+            <label>
+              台番号
+              <input type="text" inputmode="numeric" data-batch-index="${index}" data-batch-field="number" value="${escapeHtml(result.number)}" placeholder="手動入力" required />
+            </label>
+            <label>
+              差枚
+              <input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="要確認" required />
+            </label>
+            <label>
+              勝敗
+              <span class="batch-winlose ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</span>
+            </label>
+            <label>
+              店舗名
+              <input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required />
+            </label>
+            <label>
+              機種名
+              <input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required />
+            </label>
+            <label>
+              日付
+              <input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required />
+            </label>
+            <label>
+              特日タグ
+              <select data-batch-index="${index}" data-batch-field="tag" required>
+                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="batch-memo-field">
+              メモ
+              <textarea data-batch-index="${index}" data-batch-field="memo" rows="2" placeholder="要確認メモ">${escapeHtml(memo)}</textarea>
+            </label>
+          </div>
+          <div class="button-row batch-card-actions">
+            <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
+          </div>
+        </div>
+      </div>
+    </article>
   `;
+}
+
+function formatBatchHeading(result) {
+  const numberLabel = String(result.number || "").trim() ? `${String(result.number).trim()}番` : "台番号未読取";
+  if (batchMedalsNeedReview(result)) return `${numberLabel} 要確認`;
+  return `${numberLabel} ${formatMedals(result.medals)}`;
+}
+
+function getBatchHeadingClass(result) {
+  if (batchMedalsNeedReview(result)) return "review";
+  return Number(result.medals) > 0 ? "win" : "lose";
+}
+
+function batchMedalsNeedReview(result) {
+  if (result.medalsConfirmed) return false;
+  const warnings = (result.warnings || []).filter((warning) => warning !== "数字除外済み");
+  const memo = String(result.memo || "");
+  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗/.test(memo);
 }
 
 function handleBatchInput(event) {
@@ -1411,21 +1462,29 @@ function handleBatchInput(event) {
   if (!result) return;
   result[field] = field === "medals" ? input.value : input.value.trim();
   result.saved = false;
+  if (field === "medals") result.medalsConfirmed = true;
   if (field === "memo") result.warnings = [];
 
   const row = input.closest(".batch-row");
   const saveButton = row?.querySelector("[data-batch-save]");
   if (saveButton) saveButton.disabled = false;
-  row?.classList.remove("saved");
-  if (field === "medals") updateBatchResultBanner(row, result.medals);
+  card?.classList.remove("saved");
+  if (field === "medals" || field === "number" || field === "memo") updateBatchResultBanner(card, result);
 }
 
-function updateBatchResultBanner(row, medals) {
-  const resultCell = row?.querySelector(".batch-result-text");
-  if (!resultCell) return;
-  resultCell.classList.toggle("win", Number(medals) > 0);
-  resultCell.classList.toggle("lose", Number(medals) <= 0);
-  resultCell.textContent = Number(medals) > 0 ? "勝ち" : "負け";
+function updateBatchResultBanner(card, result) {
+  const resultCell = card?.querySelector(".batch-winlose");
+  const title = card?.querySelector(".batch-card-title");
+  if (resultCell) {
+    resultCell.classList.toggle("win", Number(result.medals) > 0);
+    resultCell.classList.toggle("lose", Number(result.medals) <= 0);
+    resultCell.textContent = Number(result.medals) > 0 ? "勝ち" : "負け";
+  }
+  if (title) {
+    title.classList.remove("win", "lose", "review");
+    title.classList.add(getBatchHeadingClass(result));
+    title.textContent = formatBatchHeading(result);
+  }
 }
 
 function handleBatchClick(event) {
