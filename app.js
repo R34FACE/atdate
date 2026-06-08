@@ -109,8 +109,13 @@ function bindEvents() {
     filter.addEventListener("change", renderRecords);
   });
   elements.recordsNumberFilter.addEventListener("input", renderRecords);
-  [elements.recommendShopFilter, elements.recommendTagInput, elements.recommendMachineFilter].forEach((filter) => {
+  [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
+  });
+  elements.recommendTagInput.addEventListener("input", renderRecommendations);
+  elements.recommendTagInput.addEventListener("change", () => {
+    addCandidate("tags", elements.recommendTagInput.value);
+    renderRecommendations();
   });
   elements.exportCsvButton.addEventListener("click", exportCsv);
   elements.importCsvInput.addEventListener("change", importCsv);
@@ -206,7 +211,6 @@ function renderCandidateControls() {
   renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.summaryTagFilter, state.candidates.tags, "すべて");
   renderSelectOptions(elements.recordsTagFilter, state.candidates.tags, "すべて");
-  renderSelectOptions(elements.recommendTagInput, state.candidates.tags, "選択してください");
 }
 
 function renderDatalist(element, values) {
@@ -1426,9 +1430,15 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               特日タグ
-              <select data-batch-index="${index}" data-batch-field="tag" required>
-                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
-              </select>
+              <input
+                type="text"
+                list="tagCandidates"
+                data-batch-index="${index}"
+                data-batch-field="tag"
+                value="${escapeHtml(result.tag)}"
+                placeholder="候補から選択または直接入力"
+                required
+              />
             </label>
             <label class="batch-memo-field">
               メモ
