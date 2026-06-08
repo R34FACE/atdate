@@ -1385,7 +1385,7 @@ function renderBatchResultCard(result, index) {
   const warningText = renderBatchWarnings(result);
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
-    <article class="batch-card ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}" data-batch-card="${index}">
+    <article class="batch-result-card ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}" data-batch-card="${index}">
       <header class="batch-card-head">
         <div>
           <p class="batch-card-kicker">${escapeHtml(status)}</p>
@@ -1410,7 +1410,7 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               勝敗
-              <span class="batch-winlose ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</span>
+              <span class="batch-result-text ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</span>
             </label>
             <label>
               店舗名
@@ -1426,7 +1426,9 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               特日タグ
-              <input type="text" list="tagCandidates" data-batch-index="${index}" data-batch-field="tag" value="${escapeHtml(result.tag)}" placeholder="候補から選択または直接入力" required />
+              <select data-batch-index="${index}" data-batch-field="tag" required>
+                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
+              </select>
             </label>
             <label class="batch-memo-field">
               メモ
@@ -1475,15 +1477,15 @@ function handleBatchInput(event) {
   if (event.type === "change" && field === "machine") addCandidate("machines", result[field]);
   if (event.type === "change" && field === "tag") addCandidate("tags", result[field]);
 
-  const row = input.closest(".batch-row");
-  const saveButton = row?.querySelector("[data-batch-save]");
+  const card = input.closest(".batch-result-card");
+  const saveButton = card?.querySelector("[data-batch-save]");
   if (saveButton) saveButton.disabled = false;
   card?.classList.remove("saved");
   if (field === "medals" || field === "number" || field === "memo") updateBatchResultBanner(card, result);
 }
 
 function updateBatchResultBanner(card, result) {
-  const resultCell = card?.querySelector(".batch-winlose");
+  const resultCell = card?.querySelector(".batch-result-text");
   const title = card?.querySelector(".batch-card-title");
   if (resultCell) {
     resultCell.classList.toggle("win", Number(result.medals) > 0);
