@@ -57,6 +57,7 @@ const elements = {
   recordsExportCsvButton: $("recordsExportCsvButton"),
   recordsImportCsvInput: $("recordsImportCsvInput"),
   clearAllRecordsButton: $("clearAllRecordsButton"),
+  debugLog: $("debugLog"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -1474,8 +1475,8 @@ function handleBatchInput(event) {
   if (event.type === "change" && field === "machine") addCandidate("machines", result[field]);
   if (event.type === "change" && field === "tag") addCandidate("tags", result[field]);
 
-  const card = input.closest(".batch-card");
-  const saveButton = card?.querySelector("[data-batch-save]");
+  const row = input.closest(".batch-row");
+  const saveButton = row?.querySelector("[data-batch-save]");
   if (saveButton) saveButton.disabled = false;
   card?.classList.remove("saved");
   if (field === "medals" || field === "number" || field === "memo") updateBatchResultBanner(card, result);
