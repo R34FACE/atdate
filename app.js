@@ -56,6 +56,7 @@ const elements = {
   recordsExportCsvButton: $("recordsExportCsvButton"),
   recordsImportCsvInput: $("recordsImportCsvInput"),
   clearAllRecordsButton: $("clearAllRecordsButton"),
+  debugLog: $("debugLog"),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
