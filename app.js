@@ -1,6 +1,6 @@
 const STORAGE_KEY = "atSlotSpecialDayRecords";
 const CANDIDATE_STORAGE_KEY = "atSlotNameCandidates";
-const TAGS = ["ゾロ目日", "7の日", "周年", "月イチ", "その他"];
+const DEFAULT_TAGS = ["ゾロ目日", "7の日", "周年", "月イチ", "新台入替", "旧イベ", "媒体系", "その他"];
 
 const state = {
   records: loadRecords(),
@@ -49,6 +49,7 @@ const elements = {
   recommendMachineFilter: $("recommendMachineFilter"),
   shopCandidates: $("shopCandidates"),
   machineCandidates: $("machineCandidates"),
+  tagCandidates: $("tagCandidates"),
   recommendTagInput: $("recommendTagInput"),
   recommendationList: $("recommendationList"),
   exportCsvButton: $("exportCsvButton"),
@@ -61,6 +62,7 @@ const elements = {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("dateInput").valueAsDate = new Date();
+  $("tagInput").value = $("tagInput").value || DEFAULT_TAGS[0];
   syncConfirmFromScan();
   seedCandidatesFromRecords();
   bindEvents();
@@ -79,6 +81,9 @@ function bindEvents() {
     input.addEventListener("input", applyScanDefaultsToBatchResults);
     input.addEventListener("change", applyScanDefaultsToBatchResults);
   });
+  [$("shopInput"), $("confirmShopInput")].forEach((input) => input.addEventListener("change", () => addCandidate("shops", input.value)));
+  [$("machineInput"), $("confirmMachineInput")].forEach((input) => input.addEventListener("change", () => addCandidate("machines", input.value)));
+  [$("tagInput"), $("confirmTagInput")].forEach((input) => input.addEventListener("change", () => addCandidate("tags", input.value)));
   elements.bulkRegisterButton.addEventListener("click", saveAllBatchResults);
   elements.batchResults.addEventListener("input", handleBatchInput);
   elements.batchResults.addEventListener("change", handleBatchInput);
@@ -143,9 +148,10 @@ function loadCandidates() {
     return {
       shops: uniqueSorted(parsed.shops || []),
       machines: uniqueSorted(parsed.machines || []),
+      tags: uniqueSorted([...(parsed.tags || []), ...DEFAULT_TAGS]),
     };
   } catch {
-    return { shops: [], machines: [] };
+    return { shops: [], machines: [], tags: [...DEFAULT_TAGS] };
   }
 }
 
@@ -157,6 +163,7 @@ function seedCandidatesFromRecords() {
   state.records.forEach((record) => {
     addCandidate("shops", record.shop, false);
     addCandidate("machines", record.machine, false);
+    addCandidate("tags", record.tag, false);
   });
   saveCandidates();
 }
@@ -190,14 +197,16 @@ function uniqueSorted(values) {
 function renderCandidateControls() {
   renderDatalist(elements.shopCandidates, state.candidates.shops);
   renderDatalist(elements.machineCandidates, state.candidates.machines);
+  renderDatalist(elements.tagCandidates, state.candidates.tags);
   renderSelectOptions(elements.summaryShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.recordsMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recommendShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
-  renderSelectOptions(elements.summaryTagFilter, TAGS, "すべて");
-  renderSelectOptions(elements.recordsTagFilter, TAGS, "すべて");
+  renderSelectOptions(elements.summaryTagFilter, state.candidates.tags, "すべて");
+  renderSelectOptions(elements.recordsTagFilter, state.candidates.tags, "すべて");
+  renderSelectOptions(elements.recommendTagInput, state.candidates.tags, "選択してください");
 }
 
 function renderDatalist(element, values) {
@@ -1417,9 +1426,7 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               特日タグ
-              <select data-batch-index="${index}" data-batch-field="tag" required>
-                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
-              </select>
+              <input type="text" list="tagCandidates" data-batch-index="${index}" data-batch-field="tag" value="${escapeHtml(result.tag)}" placeholder="候補から選択または直接入力" required />
             </label>
             <label class="batch-memo-field">
               メモ
@@ -1464,6 +1471,9 @@ function handleBatchInput(event) {
   result.saved = false;
   if (field === "medals") result.medalsConfirmed = true;
   if (field === "memo") result.warnings = [];
+  if (event.type === "change" && field === "shop") addCandidate("shops", result[field]);
+  if (event.type === "change" && field === "machine") addCandidate("machines", result[field]);
+  if (event.type === "change" && field === "tag") addCandidate("tags", result[field]);
 
   const row = input.closest(".batch-row");
   const saveButton = row?.querySelector("[data-batch-save]");
@@ -1567,13 +1577,17 @@ function getBatchResultMissingFields(result) {
   return missing;
 }
 
+function normalizeTag(value) {
+  return String(value || "").trim() || "その他";
+}
+
 function createRecordFromBatchResult(result) {
   const medals = Number(result.medals);
   return {
     id: crypto.randomUUID(),
     date: result.date,
     shop: String(result.shop || "").trim(),
-    tag: TAGS.includes(result.tag) ? result.tag : "その他",
+    tag: normalizeTag(result.tag),
     machine: String(result.machine || "").trim(),
     number: String(result.number || "").trim(),
     medals: Number.isFinite(medals) ? Math.round(medals) : 0,
@@ -1592,7 +1606,7 @@ function createRecordFromConfirmForm() {
     id: editingId || crypto.randomUUID(),
     date: $("confirmDateInput").value,
     shop: $("confirmShopInput").value.trim(),
-    tag: $("confirmTagInput").value,
+    tag: normalizeTag($("confirmTagInput").value),
     machine: $("confirmMachineInput").value.trim(),
     number: $("confirmNumberInput").value.trim(),
     medals: Number.isFinite(medalValue) ? Math.round(medalValue) : 0,
@@ -1610,6 +1624,7 @@ function validateRecord(record) {
 function saveRecord(record) {
   addCandidate("shops", record.shop);
   addCandidate("machines", record.machine);
+  addCandidate("tags", record.tag);
 
   const index = state.records.findIndex((item) => item.id === record.id);
   if (index >= 0) {
@@ -1977,7 +1992,7 @@ function importCsv(event) {
         id: crypto.randomUUID(),
         date: row[0] || "",
         shop: row[1] || "",
-        tag: TAGS.includes(row[2]) ? row[2] : "その他",
+        tag: normalizeTag(row[2]),
         machine: row[3] || "",
         number: row[4] || "",
         medals,

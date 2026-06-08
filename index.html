@@ -204,13 +204,8 @@
             </label>
             <label>
               特日タグ
-              <select id="tagInput">
-                <option value="ゾロ目日">ゾロ目日</option>
-                <option value="7の日">7の日</option>
-                <option value="周年">周年</option>
-                <option value="月イチ">月イチ</option>
-                <option value="その他">その他</option>
-              </select>
+              <input id="tagInput" type="text" list="tagCandidates" placeholder="候補から選択または直接入力" />
+              <span class="field-hint">新規追加した特日タグは登録時に候補へ保存されます。</span>
             </label>
             <label>
               機種名
@@ -275,13 +270,7 @@
             </label>
             <label>
               特日タグ
-              <select id="confirmTagInput" required>
-                <option value="ゾロ目日">ゾロ目日</option>
-                <option value="7の日">7の日</option>
-                <option value="周年">周年</option>
-                <option value="月イチ">月イチ</option>
-                <option value="その他">その他</option>
-              </select>
+              <input id="confirmTagInput" type="text" list="tagCandidates" placeholder="候補から選択または直接入力" required />
             </label>
             <label>
               機種名
@@ -318,5 +307,6 @@
 
     <datalist id="shopCandidates"></datalist>
     <datalist id="machineCandidates"></datalist>
+    <datalist id="tagCandidates"></datalist>
   </body>
 </html>
