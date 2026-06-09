@@ -900,7 +900,7 @@ function rectOverlapRatio(a, b) {
   return overlap / Math.max(1, smaller);
 }
 
-function analyzeGraphDiff(sourceCanvas, graphRect) {
+async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
   const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
@@ -1686,7 +1686,7 @@ function batchMedalsNeedReview(result) {
   if (result.medalsConfirmed) return false;
   const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下黄色数字除外済み"].includes(warning));
   const memo = String(result.memo || "");
-  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗/.test(memo);
+  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗|右下表示とライン推定/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗|右下表示とライン推定/.test(memo);
 }
 
 function handleBatchInput(event) {
