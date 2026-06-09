@@ -199,8 +199,25 @@
             <label>
               特日タグ
               <input id="tagInput" type="text" list="tagCandidates" placeholder="候補から選択または直接入力" />
-              <span class="field-hint">新規追加した特日タグは登録時に候補へ保存されます。</span>
+              <span class="field-hint">保存済みタグは下の一覧から複数追加できます。</span>
             </label>
+            <div class="wide tag-manager" aria-labelledby="tagManagerTitle">
+              <div class="tag-manager-head">
+                <div>
+                  <h3 id="tagManagerTitle">特日タグ管理</h3>
+                  <p class="field-hint">保存済みタグを選択して、現在の特日タグ欄へ「 / 」区切りで追加できます。</p>
+                </div>
+              </div>
+              <div class="tag-save-row">
+                <input id="tagCandidateInput" type="text" placeholder="保存する特日タグ" />
+                <button class="ghost-button" id="tagCandidateSaveButton" type="button">特日タグ保存</button>
+              </div>
+              <div class="saved-tag-list" id="savedTagList" aria-label="保存済み特日タグ一覧"></div>
+              <div class="button-row tag-manager-actions">
+                <button class="primary-button" id="addSavedTagsButton" type="button">特日タグに追加</button>
+                <button class="danger-button" id="deleteSavedTagsButton" type="button">選択タグを削除</button>
+              </div>
+            </div>
             <label>
               機種名
               <input id="machineInput" type="text" list="machineCandidates" placeholder="候補から選択または直接入力" />

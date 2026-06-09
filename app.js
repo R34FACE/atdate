@@ -10,6 +10,7 @@ const state = {
   summaryMode: "tag",
   activeView: "recommend",
   candidates: loadCandidates(),
+  activeTagInput: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -50,6 +51,11 @@ const elements = {
   shopCandidates: $("shopCandidates"),
   machineCandidates: $("machineCandidates"),
   tagCandidates: $("tagCandidates"),
+  tagCandidateInput: $("tagCandidateInput"),
+  tagCandidateSaveButton: $("tagCandidateSaveButton"),
+  savedTagList: $("savedTagList"),
+  addSavedTagsButton: $("addSavedTagsButton"),
+  deleteSavedTagsButton: $("deleteSavedTagsButton"),
   recommendTagInput: $("recommendTagInput"),
   recommendationList: $("recommendationList"),
   exportCsvButton: $("exportCsvButton"),
@@ -63,6 +69,7 @@ const elements = {
 document.addEventListener("DOMContentLoaded", () => {
   $("dateInput").valueAsDate = new Date();
   $("tagInput").value = $("tagInput").value || DEFAULT_TAGS[0];
+  state.activeTagInput = $("tagInput");
   syncConfirmFromScan();
   seedCandidatesFromRecords();
   bindEvents();
@@ -84,6 +91,7 @@ function bindEvents() {
   [$("shopInput"), $("confirmShopInput")].forEach((input) => input.addEventListener("change", () => addCandidate("shops", input.value)));
   [$("machineInput"), $("confirmMachineInput")].forEach((input) => input.addEventListener("change", () => addCandidate("machines", input.value)));
   [$("tagInput"), $("confirmTagInput")].forEach((input) => input.addEventListener("change", () => addCandidate("tags", input.value)));
+  bindTagManagerEvents();
   elements.bulkRegisterButton.addEventListener("click", saveAllBatchResults);
   elements.batchResults.addEventListener("input", handleBatchInput);
   elements.batchResults.addEventListener("change", handleBatchInput);
@@ -135,6 +143,74 @@ function bindEvents() {
   });
 }
 
+function bindTagManagerEvents() {
+  document.addEventListener("focusin", (event) => {
+    if (isTagInputElement(event.target)) state.activeTagInput = event.target;
+  });
+  elements.tagCandidateSaveButton?.addEventListener("click", saveTagCandidateFromInput);
+  elements.tagCandidateInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveTagCandidateFromInput();
+    }
+  });
+  elements.addSavedTagsButton?.addEventListener("click", addSelectedSavedTagsToActiveInput);
+  elements.deleteSavedTagsButton?.addEventListener("click", deleteSelectedSavedTags);
+}
+
+function isTagInputElement(element) {
+  return element instanceof HTMLInputElement && element.getAttribute("list") === "tagCandidates";
+}
+
+function saveTagCandidateFromInput() {
+  const tags = splitTagString(elements.tagCandidateInput?.value || "");
+  if (!tags.length) return;
+  tags.forEach((tag) => addCandidate("tags", tag, false));
+  if (elements.tagCandidateInput) elements.tagCandidateInput.value = "";
+  renderCandidateControls();
+}
+
+function addSelectedSavedTagsToActiveInput() {
+  const selected = getSelectedSavedTags();
+  if (!selected.length) return;
+  const target = isTagInputElement(state.activeTagInput) ? state.activeTagInput : $("tagInput");
+  appendTagsToInput(target, selected);
+}
+
+function deleteSelectedSavedTags() {
+  const selected = getSelectedSavedTags();
+  if (!selected.length) return;
+  const selectedKeys = new Set(selected.map((tag) => tag.toLocaleLowerCase("ja-JP")));
+  state.candidates.tags = state.candidates.tags.filter((tag) => !selectedKeys.has(tag.toLocaleLowerCase("ja-JP")));
+  saveCandidates();
+  renderCandidateControls();
+}
+
+function getSelectedSavedTags() {
+  if (!elements.savedTagList) return [];
+  return Array.from(elements.savedTagList.querySelectorAll('[data-saved-tag]:checked')).map((input) => input.value);
+}
+
+function appendTagsToInput(input, tags) {
+  const combined = uniqueSorted([...splitTagString(input.value), ...tags]);
+  input.value = combined.join(" / ");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function splitTagString(value) {
+  return String(value || "")
+    .split("/")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function recordMatchesTag(recordTag, filterTag) {
+  const filter = String(filterTag || "").trim();
+  if (!filter) return true;
+  return splitTagString(recordTag).some((tag) => tag === filter || tag.includes(filter)) || String(recordTag || "").includes(filter);
+}
+
 function loadRecords() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -153,7 +229,7 @@ function loadCandidates() {
     return {
       shops: uniqueSorted(parsed.shops || []),
       machines: uniqueSorted(parsed.machines || []),
-      tags: uniqueSorted([...(parsed.tags || []), ...DEFAULT_TAGS]),
+      tags: uniqueSorted(Array.isArray(parsed.tags) ? parsed.tags : DEFAULT_TAGS),
     };
   } catch {
     return { shops: [], machines: [], tags: [...DEFAULT_TAGS] };
@@ -168,18 +244,24 @@ function seedCandidatesFromRecords() {
   state.records.forEach((record) => {
     addCandidate("shops", record.shop, false);
     addCandidate("machines", record.machine, false);
-    addCandidate("tags", record.tag, false);
+    splitTagString(record.tag).forEach((tag) => addCandidate("tags", tag, false));
   });
   saveCandidates();
 }
 
 function addCandidate(type, value, shouldRender = true) {
-  const name = String(value || "").trim();
-  if (!name) return false;
-  const normalized = name.toLocaleLowerCase("ja-JP");
+  const names = type === "tags" ? splitTagString(value) : [String(value || "").trim()].filter(Boolean);
+  if (!names.length) return false;
   const list = state.candidates[type] || [];
-  if (list.some((item) => item.toLocaleLowerCase("ja-JP") === normalized)) return false;
-  state.candidates[type] = uniqueSorted([...list, name]);
+  let changed = false;
+  names.forEach((name) => {
+    const normalized = name.toLocaleLowerCase("ja-JP");
+    if (list.some((item) => item.toLocaleLowerCase("ja-JP") === normalized)) return;
+    list.push(name);
+    changed = true;
+  });
+  if (!changed) return false;
+  state.candidates[type] = uniqueSorted(list);
   saveCandidates();
   if (shouldRender) renderCandidateControls();
   return true;
@@ -203,6 +285,7 @@ function renderCandidateControls() {
   renderDatalist(elements.shopCandidates, state.candidates.shops);
   renderDatalist(elements.machineCandidates, state.candidates.machines);
   renderDatalist(elements.tagCandidates, state.candidates.tags);
+  renderSavedTagList();
   renderSelectOptions(elements.summaryShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
@@ -211,6 +294,24 @@ function renderCandidateControls() {
   renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.summaryTagFilter, state.candidates.tags, "すべて");
   renderSelectOptions(elements.recordsTagFilter, state.candidates.tags, "すべて");
+}
+
+function renderSavedTagList() {
+  if (!elements.savedTagList) return;
+  if (!state.candidates.tags.length) {
+    elements.savedTagList.innerHTML = `<p class="field-hint">保存済み特日タグはありません。</p>`;
+    return;
+  }
+  elements.savedTagList.innerHTML = state.candidates.tags
+    .map(
+      (tag) => `
+        <label class="saved-tag-item">
+          <input type="checkbox" data-saved-tag value="${escapeHtml(tag)}" />
+          <span>${escapeHtml(tag)}</span>
+        </label>
+      `
+    )
+    .join("");
 }
 
 function renderDatalist(element, values) {
@@ -803,6 +904,9 @@ async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
   const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
+  const gridLines = detectGraphGridLines(imageData);
+  const zeroLine = detectZeroLineFromGridLines(gridLines, graphCanvas.height);
+  const unitHeight = medianDistanceBetweenGridLines(gridLines, zeroLine?.y, graphCanvas.height);
   const yellowMask = buildYellowMask(imageData);
   const yellowComponents = detectYellowComponents(yellowMask, graphCanvas.width, graphCanvas.height);
   const textBlocks = detectYellowTextBlocks(yellowComponents, graphCanvas.width, graphCanvas.height);
@@ -810,149 +914,151 @@ async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const trace = buildYellowLineTrace(lineMask, graphCanvas.width, graphCanvas.height);
   const segments = findYellowLineTraceSegments(trace, graphCanvas.width, graphCanvas.height, textBlocks);
   const endpoint = detectYellowEndpoint(segments, graphCanvas.width, graphCanvas.height, textBlocks);
-  const zeroLine = detectZeroLineY(imageData);
-  const zeroLineY = zeroLine?.y ?? null;
   const endpointIsText = endpointLooksLikeText(endpoint, textBlocks, graphCanvas.width, graphCanvas.height);
-  const displayedMedals = await readDisplayedMedalsText(sourceCanvas, graphRect);
+  const payoutTextRemoved = textBlocks.some((block) => isRectInPayoutZone(block, graphCanvas.width, graphCanvas.height));
 
   debugLog("analyzeGraphDiff", {
     graphRect,
+    gridLines,
+    zeroLine,
+    unitHeight,
     yellowComponents: yellowComponents.length,
     yellowTextBlocks: textBlocks.length,
     textBlocks,
     tracePoints: trace.filter(Boolean).length,
     segments: segments.map((segment) => ({ startX: segment.startX, endX: segment.endX, length: segment.points.length, textLike: segment.textLike })),
-    zeroLine,
     endpoint,
     endpointIsText,
-    displayedMedals,
-    yellowTextRemoved: textBlocks.length > 0,
+    rightBottomYellowTextRemoved: payoutTextRemoved,
   });
 
-  if (!endpoint) {
-    const message = segments.some((segment) => segment.textLike)
-      ? "要確認：数字誤認識（黄色文字をグラフ線候補から除外しました）"
-      : "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
-    setStatus(message);
-    return { medals: Number.NaN, warnings: [message], memo: Number.isFinite(displayedMedals) ? "要確認：黄色ライン終点検出失敗" : "要確認：右下表示OCR失敗" };
-  }
-
   const warnings = [];
-  if (!zeroLine?.detected) warnings.push("要確認：0ラインを検出できませんでした");
-  if (endpointIsText) warnings.push("要確認：黄色ライン終点が黄色文字付近にあります");
-
-  const lineEstimate = estimateMedalsFromEndpoint(endpoint, zeroLineY, graphCanvas.width, graphCanvas.height);
-  if (Number.isFinite(lineEstimate) && (lineEstimate <= -5000 || lineEstimate >= 5000)) warnings.push("要確認：数字誤認識または推定差枚が異常値です");
-  const sign = decideDiffSign(endpoint, zeroLineY);
   const memos = [];
-  if (textBlocks.length) memos.push("数字除外済み");
-
-  debugLog("推定差枚", { lineEstimate, displayedMedals, sign, zeroLineY, endpoint, warnings });
-
-  if (Number.isFinite(displayedMedals) && displayedMedals > 0 && sign !== 0 && !endpointIsText) {
-    const medals = sign * displayedMedals;
-    memos.unshift("右下表示枚数採用 / 黄色ラインで符号判定");
-    warnings.push("右下表示枚数採用");
-    if (Number.isFinite(lineEstimate)) {
-      if (Math.abs(medals - lineEstimate) >= 800 || Math.sign(medals) !== Math.sign(lineEstimate)) {
-        warnings.push("要確認：右下表示とライン推定に差があります");
-        memos.push("要確認：右下表示とライン推定に差があります");
-      }
-    }
-    return { medals, warnings: uniqueSorted(warnings), memo: uniqueSorted(memos).join(" / ") };
-  }
-
-  if (!Number.isFinite(displayedMedals)) memos.push("要確認：右下表示OCR失敗");
-  if (Number.isFinite(displayedMedals) && sign === 0) memos.push("要確認：0ライン検出失敗");
-  if (Number.isFinite(displayedMedals) && endpointIsText) memos.push("要確認：黄色ライン終点が黄色文字付近にあります");
+  if (payoutTextRemoved) memos.push("右下黄色数字除外済み");
+  if (!zeroLine?.detected) warnings.push("要確認：0ライン検出失敗");
+  if (!Number.isFinite(unitHeight)) warnings.push("要確認：1000枚単位の目盛り間隔を検出できませんでした");
+  if (!endpoint) warnings.push("要確認：黄色線終点検出失敗");
+  if (endpointIsText) warnings.push("要確認：終点が右下黄色文字エリアに入っています");
 
   if (warnings.length) {
+    const memo = uniqueSorted([...memos, ...warnings, "要確認：手入力してください"]).join(" / ");
     setStatus(warnings[0]);
-    return { medals: Number.NaN, warnings: uniqueSorted(warnings), memo: uniqueSorted(memos).join(" / ") };
+    return { medals: Number.NaN, warnings: uniqueSorted(warnings), memo };
   }
 
-  memos.unshift("黄色ライン終点から推定");
-  return { medals: lineEstimate, warnings: textBlocks.length ? ["数字除外済み"] : [], memo: uniqueSorted(memos).join(" / ") };
-}
-
-function estimateMedalsFromEndpoint(endpoint, zeroLineY, width, height) {
-  if (!endpoint) return Number.NaN;
-  const graphTop = Math.max(0, height * 0.08);
-  const graphBottom = Math.min(height - 1, height * 0.92);
-  const baseZeroLine = Number.isFinite(zeroLineY) ? zeroLineY : height * 0.5;
-  const span = Math.max(1, Math.max(baseZeroLine - graphTop, graphBottom - baseZeroLine));
-  return Math.round(((baseZeroLine - endpoint.y) / span) * 5000 / 50) * 50;
-}
-
-function decideDiffSign(endpoint, zeroLineY) {
-  if (!endpoint || !Number.isFinite(zeroLineY)) return 0;
-  return endpoint.y < zeroLineY ? 1 : -1;
-}
-
-async function readDisplayedMedalsText(sourceCanvas, graphRect) {
-  if (!window.Tesseract) return Number.NaN;
-  const rectWidth = graphRect.right - graphRect.left + 1;
-  const rectHeight = graphRect.bottom - graphRect.top + 1;
-  const displayRect = {
-    left: Math.max(0, Math.round(graphRect.left + rectWidth * 0.60)),
-    right: Math.min(sourceCanvas.width - 1, Math.round(graphRect.right)),
-    top: Math.max(0, Math.round(graphRect.top + rectHeight * 0.65)),
-    bottom: Math.min(sourceCanvas.height - 1, Math.round(graphRect.bottom)),
-  };
-  if (displayRect.right <= displayRect.left || displayRect.bottom <= displayRect.top) return Number.NaN;
-
-  const cropped = cropCanvas(sourceCanvas, displayRect, { padding: 8, fill: "black" });
-  const enhanced = enhanceYellowMedalsForOcr(cropped);
-  try {
-    const result = await window.Tesseract.recognize(enhanced, "eng", {
-      tessedit_pageseg_mode: "6",
-      tessedit_char_whitelist: "0123456789,＋+-枚 ",
-    });
-    const text = result.data.text || "";
-    const medals = parseDisplayedMedalsText(text);
-    debugLog("右下表示枚数OCR", { text, medals, displayRect });
-    return medals;
-  } catch (error) {
-    debugLog("右下表示枚数OCR失敗", error?.message || String(error));
-    return Number.NaN;
+  const medals = Math.round(((zeroLine.y - endpoint.y) / unitHeight) * 1000 / 50) * 50;
+  if (!Number.isFinite(medals) || Math.abs(medals) > 5000) {
+    const warning = "要確認：推定差枚が±5000枚を超えています";
+    const memo = uniqueSorted([...memos, warning, "要確認：手入力してください"]).join(" / ");
+    setStatus(warning);
+    return { medals: Number.NaN, warnings: [warning], memo };
   }
+
+  memos.unshift("黄色線終点推定", "0ライン検出", "目盛り間隔1000枚");
+  debugLog("推定差枚", { medals, zeroLineY: zeroLine.y, unitHeight, endpoint, memos });
+  return { medals, warnings: payoutTextRemoved ? ["右下黄色数字除外済み"] : [], memo: uniqueSorted(memos).join(" / ") };
 }
 
-function enhanceYellowMedalsForOcr(source) {
-  const scale = 3;
-  const canvas = document.createElement("canvas");
-  canvas.width = source.width * scale;
-  canvas.height = source.height * scale;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < imageData.data.length; i += 4) {
-    const r = imageData.data[i];
-    const g = imageData.data[i + 1];
-    const b = imageData.data[i + 2];
-    const yellow = isAtGraphYellow(r, g, b) || (r > 150 && g > 115 && b < 120 && r - b > 60 && g - b > 45);
-    const value = yellow ? 0 : 255;
-    imageData.data[i] = value;
-    imageData.data[i + 1] = value;
-    imageData.data[i + 2] = value;
+function detectGraphGridLines(imageData) {
+  const { data, width, height } = imageData;
+  const scanLeft = Math.round(width * 0.05);
+  const scanRight = Math.round(width * 0.95);
+  const scanWidth = Math.max(1, scanRight - scanLeft + 1);
+  const rowCandidates = [];
+
+  for (let y = Math.round(height * 0.08); y < Math.round(height * 0.94); y += 1) {
+    let count = 0;
+    let brightnessTotal = 0;
+    let longestRun = 0;
+    let currentRun = 0;
+    for (let x = scanLeft; x <= scanRight; x += 1) {
+      const index = (y * width + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      if (isGraphGridPixel(r, g, b)) {
+        count += 1;
+        brightnessTotal += (r + g + b) / 3;
+        currentRun += 1;
+        longestRun = Math.max(longestRun, currentRun);
+      } else {
+        currentRun = 0;
+      }
+    }
+    const lengthScore = Math.max(count, longestRun) / scanWidth;
+    if (lengthScore >= 0.18) {
+      rowCandidates.push({ y, count, longestRun, lengthScore, brightness: brightnessTotal / Math.max(1, count) });
+    }
   }
-  ctx.putImageData(imageData, 0, 0);
-  return canvas;
+
+  const groups = [];
+  rowCandidates.forEach((row) => {
+    const last = groups[groups.length - 1];
+    if (!last || row.y - last.rows[last.rows.length - 1].y > 1) {
+      groups.push({ rows: [row] });
+      return;
+    }
+    last.rows.push(row);
+  });
+
+  return groups
+    .map((group) => {
+      const best = group.rows.slice().sort((a, b) => b.lengthScore - a.lengthScore || b.brightness - a.brightness)[0];
+      const weightedY = group.rows.reduce((sum, row) => sum + row.y * row.lengthScore, 0) / group.rows.reduce((sum, row) => sum + row.lengthScore, 0);
+      const thickness = group.rows.length;
+      const lengthScore = Math.max(...group.rows.map((row) => row.lengthScore));
+      const brightnessScore = group.rows.reduce((sum, row) => sum + row.brightness, 0) / group.rows.length / 255;
+      return { y: weightedY, thickness, lengthScore, brightnessScore, bestY: best.y };
+    })
+    .filter((line) => line.lengthScore >= 0.22)
+    .sort((a, b) => a.y - b.y);
 }
 
-function parseDisplayedMedalsText(text) {
-  const normalized = String(text ?? "")
-    .replace(/[，,]/g, "")
-    .replace(/[＋]/g, "+")
-    .replace(/[－ー−]/g, "-")
-    .replace(/[枚\s]/g, "")
-    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
-  const match = normalized.match(/[+-]?\d{1,5}/);
-  if (!match) return Number.NaN;
-  const medals = parseMedalsInput(match[0]);
-  return Number.isFinite(medals) ? Math.abs(medals) : Number.NaN;
+function isGraphGridPixel(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const brightness = (r + g + b) / 3;
+  return max - min <= 42 && brightness >= 95;
 }
+
+function detectZeroLineFromGridLines(gridLines, height) {
+  if (!gridLines.length) return { y: null, detected: false, reason: "no-grid-lines" };
+  const center = height * 0.5;
+  const best = gridLines
+    .map((line) => {
+      const centerPenalty = Math.abs(line.y - center) / Math.max(1, height * 0.5);
+      const score = line.thickness * 2.4 + line.lengthScore * 4 + line.brightnessScore * 2.2 - centerPenalty * 2.6;
+      return { ...line, score };
+    })
+    .sort((a, b) => b.score - a.score)[0];
+  const detected = best && best.lengthScore >= 0.25 && best.brightnessScore >= 0.40;
+  return { ...best, y: detected ? best.y : null, detected };
+}
+
+function medianDistanceBetweenGridLines(gridLines, zeroLineY, height) {
+  if (!Number.isFinite(zeroLineY)) return Number.NaN;
+  const ys = uniqueSortedNumbers(gridLines.map((line) => line.y)).filter((y) => Math.abs(y - zeroLineY) > 2);
+  const near = ys.filter((y) => Math.abs(y - zeroLineY) <= height * 0.45);
+  const all = uniqueSortedNumbers([...near, zeroLineY]).sort((a, b) => a - b);
+  const distances = [];
+  for (let index = 1; index < all.length; index += 1) {
+    const distance = Math.abs(all[index] - all[index - 1]);
+    if (distance >= Math.max(8, height * 0.025) && distance <= height * 0.35) distances.push(distance);
+  }
+  return median(distances);
+}
+
+function uniqueSortedNumbers(values) {
+  return Array.from(new Set(values.filter(Number.isFinite).map((value) => Math.round(value * 10) / 10))).sort((a, b) => a - b);
+}
+
+function median(values) {
+  if (!values.length) return Number.NaN;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
 
 function buildYellowMask(imageData) {
   const { data, width, height } = imageData;
@@ -994,10 +1100,16 @@ function detectYellowTextBlocks(components, width, height) {
 function isLikelyYellowPayoutText(component, width, height) {
   const area = component.width * component.height;
   const density = component.pixels / Math.max(1, area);
-  const inPayoutZone = component.left >= width * 0.52 && component.top >= height * 0.52;
-  const compact = component.width <= Math.max(58, width * 0.22) && component.height <= Math.max(46, height * 0.24);
-  const digitLike = density >= 0.08 && density <= 0.92;
-  return inPayoutZone && compact && digitLike;
+  const inPayoutZone = isRectInPayoutZone(component, width, height);
+  const compact = component.width <= Math.max(76, width * 0.28) && component.height <= Math.max(58, height * 0.30);
+  const dense = density >= 0.10;
+  const digitLike = compact && dense;
+  const shortWideText = component.width < width * 0.24 && component.height < height * 0.22 && density > 0.16;
+  return inPayoutZone && (digitLike || shortWideText);
+}
+
+function isRectInPayoutZone(rect, width, height) {
+  return rect.right >= width * 0.58 && rect.bottom >= height * 0.58;
 }
 
 function groupYellowTextBlocks(blocks, width, height) {
@@ -1572,7 +1684,7 @@ function batchMedalsNeedReview(result) {
   const medals = parseMedalsInput(result.medals);
   if (!Number.isFinite(medals)) return true;
   if (result.medalsConfirmed) return false;
-  const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下表示枚数採用"].includes(warning));
+  const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下黄色数字除外済み"].includes(warning));
   const memo = String(result.memo || "");
   return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗|右下表示とライン推定/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗|右下表示とライン推定/.test(memo);
 }
@@ -1713,7 +1825,7 @@ function getRecordMedals(record) {
 }
 
 function normalizeTag(value) {
-  return String(value || "").trim() || "その他";
+  return uniqueSorted(splitTagString(value)).join(" / ") || "その他";
 }
 
 function createRecordFromBatchResult(result) {
@@ -2026,7 +2138,7 @@ function groupRecords(mode, records = state.records) {
 function applyFilters(records, filters) {
   return records.filter((record) => {
     if (filters.shop && record.shop !== filters.shop) return false;
-    if (filters.tag && record.tag !== filters.tag) return false;
+    if (filters.tag && !recordMatchesTag(record.tag, filters.tag)) return false;
     if (filters.machine && record.machine !== filters.machine) return false;
     if (filters.number && !String(record.number || "").includes(filters.number)) return false;
     if (filters.startDate && String(record.date || "") < filters.startDate) return false;
