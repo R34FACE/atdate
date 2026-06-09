@@ -1059,3 +1059,72 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.tag-manager {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfc;
+}
+
+.tag-manager-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tag-save-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.saved-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.saved-tag-item {
+  display: inline-flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--text);
+  background: #f6f8f9;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.saved-tag-item input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
+  padding: 0;
+}
+
+.tag-manager-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 680px) {
+  .tag-save-row {
+    grid-template-columns: 1fr;
+  }
+
+  .tag-manager-actions {
+    justify-content: stretch;
+  }
+}
