@@ -109,8 +109,13 @@ function bindEvents() {
     filter.addEventListener("change", renderRecords);
   });
   elements.recordsNumberFilter.addEventListener("input", renderRecords);
-  [elements.recommendShopFilter, elements.recommendTagInput, elements.recommendMachineFilter].forEach((filter) => {
+  [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
+  });
+  elements.recommendTagInput.addEventListener("input", renderRecommendations);
+  elements.recommendTagInput.addEventListener("change", () => {
+    addCandidate("tags", elements.recommendTagInput.value);
+    renderRecommendations();
   });
   elements.exportCsvButton.addEventListener("click", exportCsv);
   elements.importCsvInput.addEventListener("change", importCsv);
@@ -206,7 +211,6 @@ function renderCandidateControls() {
   renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.summaryTagFilter, state.candidates.tags, "すべて");
   renderSelectOptions(elements.recordsTagFilter, state.candidates.tags, "すべて");
-  renderSelectOptions(elements.recommendTagInput, state.candidates.tags, "選択してください");
 }
 
 function renderDatalist(element, values) {
@@ -795,7 +799,7 @@ function rectOverlapRatio(a, b) {
   return overlap / Math.max(1, smaller);
 }
 
-function analyzeGraphDiff(sourceCanvas, graphRect) {
+async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
   const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
@@ -809,6 +813,7 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
   const zeroLine = detectZeroLineY(imageData);
   const zeroLineY = zeroLine?.y ?? null;
   const endpointIsText = endpointLooksLikeText(endpoint, textBlocks, graphCanvas.width, graphCanvas.height);
+  const displayedMedals = await readDisplayedMedalsText(sourceCanvas, graphRect);
 
   debugLog("analyzeGraphDiff", {
     graphRect,
@@ -820,6 +825,7 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
     zeroLine,
     endpoint,
     endpointIsText,
+    displayedMedals,
     yellowTextRemoved: textBlocks.length > 0,
   });
 
@@ -828,26 +834,124 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
       ? "要確認：数字誤認識（黄色文字をグラフ線候補から除外しました）"
       : "グラフ線を検出できませんでした。画像の線色・背景・スクショ範囲が想定と違う可能性があります。";
     setStatus(message);
-    return { medals: Number.NaN, warnings: [message] };
+    return { medals: Number.NaN, warnings: [message], memo: Number.isFinite(displayedMedals) ? "要確認：黄色ライン終点検出失敗" : "要確認：右下表示OCR失敗" };
   }
 
   const warnings = [];
   if (!zeroLine?.detected) warnings.push("要確認：0ラインを検出できませんでした");
-  if (endpointIsText) warnings.push("要確認：数字誤認識（黄色文字を終点候補として検出）");
+  if (endpointIsText) warnings.push("要確認：黄色ライン終点が黄色文字付近にあります");
 
-  const graphTop = Math.max(0, graphCanvas.height * 0.08);
-  const graphBottom = Math.min(graphCanvas.height - 1, graphCanvas.height * 0.92);
-  const baseZeroLine = Number.isFinite(zeroLineY) ? zeroLineY : graphCanvas.height * 0.5;
-  const span = Math.max(1, Math.max(baseZeroLine - graphTop, graphBottom - baseZeroLine));
-  const medals = Math.round(((baseZeroLine - endpoint.y) / span) * 5000 / 50) * 50;
-  if (medals <= -5000 || medals >= 5000) warnings.push("要確認：数字誤認識または推定差枚が異常値です");
-  debugLog("推定差枚", { medals, zeroLineY: baseZeroLine, endpoint, warnings });
+  const lineEstimate = estimateMedalsFromEndpoint(endpoint, zeroLineY, graphCanvas.width, graphCanvas.height);
+  if (Number.isFinite(lineEstimate) && (lineEstimate <= -5000 || lineEstimate >= 5000)) warnings.push("要確認：数字誤認識または推定差枚が異常値です");
+  const sign = decideDiffSign(endpoint, zeroLineY);
+  const memos = [];
+  if (textBlocks.length) memos.push("数字除外済み");
+
+  debugLog("推定差枚", { lineEstimate, displayedMedals, sign, zeroLineY, endpoint, warnings });
+
+  if (Number.isFinite(displayedMedals) && displayedMedals > 0 && sign !== 0 && !endpointIsText) {
+    const medals = sign * displayedMedals;
+    memos.unshift("右下表示枚数採用 / 黄色ラインで符号判定");
+    warnings.push("右下表示枚数採用");
+    if (Number.isFinite(lineEstimate)) {
+      if (Math.abs(medals - lineEstimate) >= 800 || Math.sign(medals) !== Math.sign(lineEstimate)) {
+        warnings.push("要確認：右下表示とライン推定に差があります");
+        memos.push("要確認：右下表示とライン推定に差があります");
+      }
+    }
+    return { medals, warnings: uniqueSorted(warnings), memo: uniqueSorted(memos).join(" / ") };
+  }
+
+  if (!Number.isFinite(displayedMedals)) memos.push("要確認：右下表示OCR失敗");
+  if (Number.isFinite(displayedMedals) && sign === 0) memos.push("要確認：0ライン検出失敗");
+  if (Number.isFinite(displayedMedals) && endpointIsText) memos.push("要確認：黄色ライン終点が黄色文字付近にあります");
 
   if (warnings.length) {
     setStatus(warnings[0]);
-    return { medals: Number.NaN, warnings: uniqueSorted(warnings) };
+    return { medals: Number.NaN, warnings: uniqueSorted(warnings), memo: uniqueSorted(memos).join(" / ") };
   }
-  return { medals, warnings: textBlocks.length ? ["数字除外済み"] : [], memo: textBlocks.length ? "最右連続区間採用 / 数字除外済み" : "最右連続区間採用" };
+
+  memos.unshift("黄色ライン終点から推定");
+  return { medals: lineEstimate, warnings: textBlocks.length ? ["数字除外済み"] : [], memo: uniqueSorted(memos).join(" / ") };
+}
+
+function estimateMedalsFromEndpoint(endpoint, zeroLineY, width, height) {
+  if (!endpoint) return Number.NaN;
+  const graphTop = Math.max(0, height * 0.08);
+  const graphBottom = Math.min(height - 1, height * 0.92);
+  const baseZeroLine = Number.isFinite(zeroLineY) ? zeroLineY : height * 0.5;
+  const span = Math.max(1, Math.max(baseZeroLine - graphTop, graphBottom - baseZeroLine));
+  return Math.round(((baseZeroLine - endpoint.y) / span) * 5000 / 50) * 50;
+}
+
+function decideDiffSign(endpoint, zeroLineY) {
+  if (!endpoint || !Number.isFinite(zeroLineY)) return 0;
+  return endpoint.y < zeroLineY ? 1 : -1;
+}
+
+async function readDisplayedMedalsText(sourceCanvas, graphRect) {
+  if (!window.Tesseract) return Number.NaN;
+  const rectWidth = graphRect.right - graphRect.left + 1;
+  const rectHeight = graphRect.bottom - graphRect.top + 1;
+  const displayRect = {
+    left: Math.max(0, Math.round(graphRect.left + rectWidth * 0.60)),
+    right: Math.min(sourceCanvas.width - 1, Math.round(graphRect.right)),
+    top: Math.max(0, Math.round(graphRect.top + rectHeight * 0.65)),
+    bottom: Math.min(sourceCanvas.height - 1, Math.round(graphRect.bottom)),
+  };
+  if (displayRect.right <= displayRect.left || displayRect.bottom <= displayRect.top) return Number.NaN;
+
+  const cropped = cropCanvas(sourceCanvas, displayRect, { padding: 8, fill: "black" });
+  const enhanced = enhanceYellowMedalsForOcr(cropped);
+  try {
+    const result = await window.Tesseract.recognize(enhanced, "eng", {
+      tessedit_pageseg_mode: "6",
+      tessedit_char_whitelist: "0123456789,＋+-枚 ",
+    });
+    const text = result.data.text || "";
+    const medals = parseDisplayedMedalsText(text);
+    debugLog("右下表示枚数OCR", { text, medals, displayRect });
+    return medals;
+  } catch (error) {
+    debugLog("右下表示枚数OCR失敗", error?.message || String(error));
+    return Number.NaN;
+  }
+}
+
+function enhanceYellowMedalsForOcr(source) {
+  const scale = 3;
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width * scale;
+  canvas.height = source.height * scale;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    const r = imageData.data[i];
+    const g = imageData.data[i + 1];
+    const b = imageData.data[i + 2];
+    const yellow = isAtGraphYellow(r, g, b) || (r > 150 && g > 115 && b < 120 && r - b > 60 && g - b > 45);
+    const value = yellow ? 0 : 255;
+    imageData.data[i] = value;
+    imageData.data[i + 1] = value;
+    imageData.data[i + 2] = value;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function parseDisplayedMedalsText(text) {
+  const normalized = String(text ?? "")
+    .replace(/[，,]/g, "")
+    .replace(/[＋]/g, "+")
+    .replace(/[－ー−]/g, "-")
+    .replace(/[枚\s]/g, "")
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
+  const match = normalized.match(/[+-]?\d{1,5}/);
+  if (!match) return Number.NaN;
+  const medals = parseMedalsInput(match[0]);
+  return Number.isFinite(medals) ? Math.abs(medals) : Number.NaN;
 }
 
 function buildYellowMask(imageData) {
@@ -1380,7 +1484,8 @@ function renderBatchResults() {
 }
 
 function renderBatchResultCard(result, index) {
-  const resultClass = Number(result.medals) > 0 ? "win" : "lose";
+  const medals = parseMedalsInput(result.medals);
+  const resultClass = Number.isFinite(medals) && medals > 0 ? "win" : "lose";
   const status = result.saved ? "登録済み" : result.failed ? "要確認" : "未登録";
   const warningText = renderBatchWarnings(result);
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
@@ -1406,11 +1511,11 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               差枚
-              <input type="number" step="1" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="要確認" required />
+              <input type="text" data-batch-index="${index}" data-batch-field="medals" value="${escapeHtml(result.medals)}" placeholder="例：-500" required />
             </label>
             <label>
               勝敗
-              <span class="batch-result-text ${resultClass}">${Number(result.medals) > 0 ? "勝ち" : "負け"}</span>
+              <span class="batch-result-text ${resultClass}">${Number.isFinite(medals) ? (medals > 0 ? "勝ち" : "負け") : "要確認"}</span>
             </label>
             <label>
               店舗名
@@ -1426,9 +1531,15 @@ function renderBatchResultCard(result, index) {
             </label>
             <label>
               特日タグ
-              <select data-batch-index="${index}" data-batch-field="tag" required>
-                ${TAGS.map((tag) => `<option value="${escapeHtml(tag)}" ${tag === result.tag ? "selected" : ""}>${escapeHtml(tag)}</option>`).join("")}
-              </select>
+              <input
+                type="text"
+                list="tagCandidates"
+                data-batch-index="${index}"
+                data-batch-field="tag"
+                value="${escapeHtml(result.tag)}"
+                placeholder="候補から選択または直接入力"
+                required
+              />
             </label>
             <label class="batch-memo-field">
               メモ
@@ -1446,20 +1557,24 @@ function renderBatchResultCard(result, index) {
 
 function formatBatchHeading(result) {
   const numberLabel = String(result.number || "").trim() ? `${String(result.number).trim()}番` : "台番号未読取";
-  if (batchMedalsNeedReview(result)) return `${numberLabel} 要確認`;
-  return `${numberLabel} ${formatMedals(result.medals)}`;
+  const medals = parseMedalsInput(result.medals);
+  if (batchMedalsNeedReview(result) || !Number.isFinite(medals)) return `${numberLabel} 要確認`;
+  return `${numberLabel} ${formatMedals(medals)}`;
 }
 
 function getBatchHeadingClass(result) {
-  if (batchMedalsNeedReview(result)) return "review";
-  return Number(result.medals) > 0 ? "win" : "lose";
+  const medals = parseMedalsInput(result.medals);
+  if (batchMedalsNeedReview(result) || !Number.isFinite(medals)) return "review";
+  return medals > 0 ? "win" : "lose";
 }
 
 function batchMedalsNeedReview(result) {
+  const medals = parseMedalsInput(result.medals);
+  if (!Number.isFinite(medals)) return true;
   if (result.medalsConfirmed) return false;
-  const warnings = (result.warnings || []).filter((warning) => warning !== "数字除外済み");
+  const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下表示枚数採用"].includes(warning));
   const memo = String(result.memo || "");
-  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗/.test(memo);
+  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗|右下表示とライン推定/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗|右下表示とライン推定/.test(memo);
 }
 
 function handleBatchInput(event) {
@@ -1487,10 +1602,11 @@ function handleBatchInput(event) {
 function updateBatchResultBanner(card, result) {
   const resultCell = card?.querySelector(".batch-result-text");
   const title = card?.querySelector(".batch-card-title");
+  const medals = parseMedalsInput(result.medals);
   if (resultCell) {
-    resultCell.classList.toggle("win", Number(result.medals) > 0);
-    resultCell.classList.toggle("lose", Number(result.medals) <= 0);
-    resultCell.textContent = Number(result.medals) > 0 ? "勝ち" : "負け";
+    resultCell.classList.toggle("win", Number.isFinite(medals) && medals > 0);
+    resultCell.classList.toggle("lose", Number.isFinite(medals) && medals <= 0);
+    resultCell.textContent = Number.isFinite(medals) ? (medals > 0 ? "勝ち" : "負け") : "要確認";
   }
   if (title) {
     title.classList.remove("win", "lose", "review");
@@ -1575,8 +1691,25 @@ function getBatchResultMissingFields(result) {
   if (!String(result.shop || "").trim()) missing.push("店舗名");
   if (!String(result.machine || "").trim()) missing.push("機種名");
   if (!String(result.number || "").trim()) missing.push("台番号");
-  if (String(result.medals ?? "").trim() === "" || !Number.isFinite(Number(result.medals))) missing.push("差枚");
+  if (String(result.medals ?? "").trim() === "" || !Number.isFinite(parseMedalsInput(result.medals))) missing.push("差枚");
   return missing;
+}
+
+function parseMedalsInput(value) {
+  const normalized = String(value ?? "")
+    .replace(/[，,]/g, "")
+    .replace(/[＋]/g, "+")
+    .replace(/[－ー−]/g, "-")
+    .replace(/[枚\s]/g, "")
+    .replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0))
+    .trim();
+  const number = Number(normalized);
+  return Number.isFinite(number) ? Math.round(number) : Number.NaN;
+}
+
+function getRecordMedals(record) {
+  const medals = parseMedalsInput(record?.medals);
+  return Number.isFinite(medals) ? medals : 0;
 }
 
 function normalizeTag(value) {
@@ -1584,7 +1717,7 @@ function normalizeTag(value) {
 }
 
 function createRecordFromBatchResult(result) {
-  const medals = Number(result.medals);
+  const medals = parseMedalsInput(result.medals);
   return {
     id: crypto.randomUUID(),
     date: result.date,
@@ -1592,7 +1725,7 @@ function createRecordFromBatchResult(result) {
     tag: normalizeTag(result.tag),
     machine: String(result.machine || "").trim(),
     number: String(result.number || "").trim(),
-    medals: Number.isFinite(medals) ? Math.round(medals) : 0,
+    medals: Number.isFinite(medals) ? medals : 0,
     result: medals > 0 ? "勝ち" : "負け",
     memo: String(result.memo || "").trim(),
     image: result.image,
@@ -1601,7 +1734,7 @@ function createRecordFromBatchResult(result) {
 }
 
 function createRecordFromConfirmForm() {
-  const medalValue = Number($("confirmMedalsInput").value);
+  const medalValue = parseMedalsInput($("confirmMedalsInput").value);
   const editingId = elements.editingIdInput.value;
   const existing = state.records.find((record) => record.id === editingId);
   return {
@@ -1611,7 +1744,7 @@ function createRecordFromConfirmForm() {
     tag: normalizeTag($("confirmTagInput").value),
     machine: $("confirmMachineInput").value.trim(),
     number: $("confirmNumberInput").value.trim(),
-    medals: Number.isFinite(medalValue) ? Math.round(medalValue) : 0,
+    medals: Number.isFinite(medalValue) ? medalValue : 0,
     result: medalValue > 0 ? "勝ち" : "負け",
     memo: existing?.memo || "",
     image: state.selectedImage,
@@ -1620,7 +1753,7 @@ function createRecordFromConfirmForm() {
 }
 
 function validateRecord(record) {
-  return Boolean(record.date && record.shop && record.machine && record.number && Number.isFinite(Number(record.medals)));
+  return Boolean(record.date && record.shop && record.machine && record.number && Number.isFinite(parseMedalsInput(record.medals)));
 }
 
 function saveRecord(record) {
@@ -1713,7 +1846,7 @@ function clearImage() {
 }
 
 function updateWinLoseBanner() {
-  const medals = Number($("confirmMedalsInput").value);
+  const medals = parseMedalsInput($("confirmMedalsInput").value);
   elements.winLoseBanner.classList.remove("win", "lose");
   if (!Number.isFinite(medals)) {
     elements.winLoseBanner.textContent = "勝敗は差枚から自動判定されます";
@@ -1745,16 +1878,17 @@ function renderRecords() {
   }
 
   elements.recordsBody.innerHTML = filtered
-    .map(
-      (record) => `
+    .map((record) => {
+      const medals = getRecordMedals(record);
+      return `
         <tr>
           <td>${escapeHtml(record.date)}</td>
           <td>${escapeHtml(record.shop)}</td>
           <td>${escapeHtml(record.tag)}</td>
           <td>${escapeHtml(record.machine)}</td>
           <td class="number-cell">${escapeHtml(record.number)}</td>
-          <td class="number-cell medals-cell ${record.medals > 0 ? "win-text" : "lose-text"}">${formatMedals(record.medals)}</td>
-          <td class="${record.medals > 0 ? "win-text" : "lose-text"}">${record.medals > 0 ? "勝ち" : "負け"}</td>
+          <td class="number-cell medals-cell ${medals > 0 ? "win-text" : "lose-text"}">${formatMedals(medals)}</td>
+          <td class="${medals > 0 ? "win-text" : "lose-text"}">${medals > 0 ? "勝ち" : "負け"}</td>
           <td>${escapeHtml(record.memo || "")}</td>
           <td>
             <div class="row-actions">
@@ -1763,8 +1897,8 @@ function renderRecords() {
             </div>
           </td>
         </tr>
-      `
-    )
+      `;
+    })
     .join("");
 
   elements.recordsBody.querySelectorAll("[data-edit]").forEach((button) => {
@@ -1905,7 +2039,7 @@ function summarizeBy(records, selector) {
   const map = new Map();
   records.forEach((record) => {
     const key = selector(record) || "未設定";
-    const medals = Number(record.medals) || 0;
+    const medals = getRecordMedals(record);
     const item = map.get(key) || { key, count: 0, positives: 0, total: 0, max: medals, min: medals };
     item.count += 1;
     item.positives += medals > 0 ? 1 : 0;
@@ -1959,17 +2093,20 @@ function clearAllRecords() {
 
 function exportCsv() {
   const headers = ["日付", "店舗名", "特日タグ", "機種名", "台番号", "差枚", "勝敗", "メモ", "画像"];
-  const rows = state.records.map((record) => [
-    record.date,
-    record.shop,
-    record.tag,
-    record.machine,
-    record.number,
-    record.medals,
-    record.medals > 0 ? "勝ち" : "負け",
-    record.memo || "",
-    record.image || "",
-  ]);
+  const rows = state.records.map((record) => {
+    const medals = getRecordMedals(record);
+    return [
+      record.date,
+      record.shop,
+      record.tag,
+      record.machine,
+      record.number,
+      medals,
+      medals > 0 ? "勝ち" : "負け",
+      record.memo || "",
+      record.image || "",
+    ];
+  });
   const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1989,7 +2126,8 @@ function importCsv(event) {
     const headers = rows[0] || [];
     const hasMemoColumn = headers.includes("メモ");
     const imported = rows.slice(1).map((row) => {
-      const medals = Number(row[5]) || 0;
+      const parsedMedals = parseMedalsInput(row[5]);
+      const medals = Number.isFinite(parsedMedals) ? parsedMedals : 0;
       return {
         id: crypto.randomUUID(),
         date: row[0] || "",
@@ -2052,7 +2190,8 @@ function csvEscape(value) {
 }
 
 function formatMedals(value) {
-  const number = Number(value) || 0;
+  const parsed = parseMedalsInput(value);
+  const number = Number.isFinite(parsed) ? parsed : 0;
   return `${number > 0 ? "+" : ""}${yen.format(number)}枚`;
 }
 

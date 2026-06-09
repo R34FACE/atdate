@@ -46,13 +46,7 @@
             </label>
             <label>
               次回特日タグ
-              <select id="recommendTagInput">
-                <option value="ゾロ目日">ゾロ目日</option>
-                <option value="7の日">7の日</option>
-                <option value="周年">周年</option>
-                <option value="月イチ">月イチ</option>
-                <option value="その他">その他</option>
-              </select>
+              <input id="recommendTagInput" type="text" list="tagCandidates" placeholder="候補から選択または直接入力" />
             </label>
             <label>
               機種名
@@ -282,7 +276,7 @@
             </label>
             <label>
               差枚
-              <input id="confirmMedalsInput" type="number" step="1" placeholder="例：1250" required />
+              <input id="confirmMedalsInput" type="text" placeholder="例：-500" required />
             </label>
             <div class="wide result-banner" id="winLoseBanner">勝敗は差枚から自動判定されます</div>
             <div class="wide button-row">
