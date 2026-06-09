@@ -527,7 +527,7 @@ function buildScanMemo(unitResult, diffResult, warnings = []) {
     if (!Number.isFinite(diffResult.medals)) messages.push("差枚要確認");
   }
   warnings.forEach((warning) => {
-    if (/数字誤認識|0ライン|異常値|黄色文字/.test(warning)) messages.push(warning);
+    if (warning.startsWith("要確認") || /数字誤認識|異常値/.test(warning)) messages.push(warning);
   });
   return uniqueSorted(messages).join(" / ");
 }
@@ -544,7 +544,8 @@ function createFailedScanResult(warnings = []) {
 }
 
 function getScanStatusMessage(results, imageCount) {
-  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []).filter((warning) => warning !== "数字除外済み"));
+  const infoWarnings = new Set(["数字除外済み", "右下黄色数字除外済み", "黄色線終点推定", "1000枚目盛り検出", "0ライン検出"]);
+  const warnings = uniqueSorted(results.flatMap((result) => result.warnings || []).filter((warning) => !infoWarnings.has(warning)));
   if (warnings.length) return warnings.join(" / ");
   const graphCount = results.length;
   if (results.some((result) => result.failed)) return "読み取りできませんでした。手動で入力してください。";
@@ -904,13 +905,21 @@ async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
   const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
+
   const gridLines = detectGraphGridLines(imageData);
-  const zeroLine = detectZeroLineFromGridLines(gridLines, graphCanvas.height);
-  const unitHeight = medianDistanceBetweenGridLines(gridLines, zeroLine?.y, graphCanvas.height);
+  const zeroLineY = detectZeroLineFromGridLines(gridLines, graphCanvas.height);
+  let unitHeight = detectUnitHeightFromGridLines(gridLines, graphCanvas.height);
+  let unitHeightEstimated = false;
+  if (!Number.isFinite(unitHeight)) {
+    unitHeight = estimateFallbackUnitHeight(graphCanvas.height);
+    unitHeightEstimated = Number.isFinite(unitHeight);
+  }
+
   const yellowMask = buildYellowMask(imageData);
-  const yellowComponents = detectYellowComponents(yellowMask, graphCanvas.width, graphCanvas.height);
+  const noPayoutMask = removePayoutNumberAreaFromYellowMask(yellowMask, graphCanvas.width, graphCanvas.height);
+  const yellowComponents = detectYellowComponents(noPayoutMask, graphCanvas.width, graphCanvas.height);
   const textBlocks = detectYellowTextBlocks(yellowComponents, graphCanvas.width, graphCanvas.height);
-  const lineMask = removeYellowTextBlocksFromMask(yellowMask, graphCanvas.width, textBlocks);
+  const lineMask = removeYellowTextBlocksFromMask(noPayoutMask, graphCanvas.width, textBlocks);
   const trace = buildYellowLineTrace(lineMask, graphCanvas.width, graphCanvas.height);
   const segments = findYellowLineTraceSegments(trace, graphCanvas.width, graphCanvas.height, textBlocks);
   const endpoint = detectYellowEndpoint(segments, graphCanvas.width, graphCanvas.height, textBlocks);
@@ -920,8 +929,9 @@ async function analyzeGraphDiff(sourceCanvas, graphRect) {
   debugLog("analyzeGraphDiff", {
     graphRect,
     gridLines,
-    zeroLine,
+    zeroLineY,
     unitHeight,
+    unitHeightEstimated,
     yellowComponents: yellowComponents.length,
     yellowTextBlocks: textBlocks.length,
     textBlocks,
@@ -929,127 +939,156 @@ async function analyzeGraphDiff(sourceCanvas, graphRect) {
     segments: segments.map((segment) => ({ startX: segment.startX, endX: segment.endX, length: segment.points.length, textLike: segment.textLike })),
     endpoint,
     endpointIsText,
-    rightBottomYellowTextRemoved: payoutTextRemoved,
+    rightBottomYellowTextRemoved: true,
   });
 
-  const warnings = [];
-  const memos = [];
-  if (payoutTextRemoved) memos.push("右下黄色数字除外済み");
-  if (!zeroLine?.detected) warnings.push("要確認：0ライン検出失敗");
-  if (!Number.isFinite(unitHeight)) warnings.push("要確認：1000枚単位の目盛り間隔を検出できませんでした");
+  const warnings = ["右下黄色数字除外済み"];
+  if (!Number.isFinite(zeroLineY)) warnings.push("要確認：0ライン検出失敗");
+  if (!Number.isFinite(unitHeight)) warnings.push("要確認：1000枚目盛り検出失敗");
+  if (unitHeightEstimated) warnings.push("要確認：目盛り間隔を暫定推定");
   if (!endpoint) warnings.push("要確認：黄色線終点検出失敗");
   if (endpointIsText) warnings.push("要確認：終点が右下黄色文字エリアに入っています");
 
-  if (warnings.length) {
-    const memo = uniqueSorted([...memos, ...warnings, "要確認：手入力してください"]).join(" / ");
-    setStatus(warnings[0]);
+  if (!Number.isFinite(zeroLineY) || !Number.isFinite(unitHeight) || !endpoint || endpointIsText) {
+    const memo = uniqueSorted([...warnings, "要確認：手入力してください"]).join(" / ");
+    setStatus(warnings.find((warning) => warning.startsWith("要確認")) || "要確認：手入力してください");
     return { medals: Number.NaN, warnings: uniqueSorted(warnings), memo };
   }
 
-  const medals = Math.round(((zeroLine.y - endpoint.y) / unitHeight) * 1000 / 50) * 50;
+  const raw = ((zeroLineY - endpoint.y) / unitHeight) * 1000;
+  const medals = Math.round(raw / 50) * 50;
   if (!Number.isFinite(medals) || Math.abs(medals) > 5000) {
     const warning = "要確認：推定差枚が±5000枚を超えています";
-    const memo = uniqueSorted([...memos, warning, "要確認：手入力してください"]).join(" / ");
+    const memo = uniqueSorted([...warnings, warning, "要確認：手入力してください"]).join(" / ");
     setStatus(warning);
-    return { medals: Number.NaN, warnings: [warning], memo };
+    return { medals: Number.NaN, warnings: uniqueSorted([...warnings, warning]), memo };
   }
 
-  memos.unshift("黄色線終点推定", "0ライン検出", "目盛り間隔1000枚");
-  debugLog("推定差枚", { medals, zeroLineY: zeroLine.y, unitHeight, endpoint, memos });
-  return { medals, warnings: payoutTextRemoved ? ["右下黄色数字除外済み"] : [], memo: uniqueSorted(memos).join(" / ") };
+  warnings.push("黄色線終点推定", unitHeightEstimated ? "要確認：目盛り間隔を暫定推定" : "1000枚目盛り検出", "0ライン検出");
+  debugLog("推定差枚", { medals, raw, zeroLineY, unitHeight, endpoint, warnings });
+  return { medals, warnings: uniqueSorted(warnings), memo: uniqueSorted(warnings).join(" / ") };
 }
 
 function detectGraphGridLines(imageData) {
   const { data, width, height } = imageData;
-  const scanLeft = Math.round(width * 0.05);
-  const scanRight = Math.round(width * 0.95);
-  const scanWidth = Math.max(1, scanRight - scanLeft + 1);
-  const rowCandidates = [];
+  const candidates = [];
+  const xStart = Math.round(width * 0.06);
+  const xEnd = Math.round(width * 0.94);
+  const scanWidth = Math.max(1, xEnd - xStart + 1);
 
-  for (let y = Math.round(height * 0.08); y < Math.round(height * 0.94); y += 1) {
+  for (let y = Math.round(height * 0.06); y < Math.round(height * 0.94); y += 1) {
     let count = 0;
-    let brightnessTotal = 0;
+    let brightnessSum = 0;
     let longestRun = 0;
-    let currentRun = 0;
-    for (let x = scanLeft; x <= scanRight; x += 1) {
+    let run = 0;
+
+    for (let x = xStart; x <= xEnd; x += 1) {
       const index = (y * width + x) * 4;
       const r = data[index];
       const g = data[index + 1];
       const b = data[index + 2];
-      if (isGraphGridPixel(r, g, b)) {
+
+      if (isGridLinePixel(r, g, b)) {
+        const luminance = pixelLuminance(r, g, b);
         count += 1;
-        brightnessTotal += (r + g + b) / 3;
-        currentRun += 1;
-        longestRun = Math.max(longestRun, currentRun);
+        brightnessSum += luminance;
+        run += 1;
+        longestRun = Math.max(longestRun, run);
       } else {
-        currentRun = 0;
+        run = 0;
       }
     }
-    const lengthScore = Math.max(count, longestRun) / scanWidth;
-    if (lengthScore >= 0.18) {
-      rowCandidates.push({ y, count, longestRun, lengthScore, brightness: brightnessTotal / Math.max(1, count) });
+
+    const ratio = count / scanWidth;
+    const runRatio = longestRun / scanWidth;
+    if (ratio >= 0.18 || runRatio >= 0.28) {
+      candidates.push({ y, count, ratio, runRatio, brightness: count ? brightnessSum / count : 0 });
     }
   }
 
-  const groups = [];
-  rowCandidates.forEach((row) => {
-    const last = groups[groups.length - 1];
-    if (!last || row.y - last.rows[last.rows.length - 1].y > 1) {
-      groups.push({ rows: [row] });
-      return;
-    }
-    last.rows.push(row);
-  });
-
-  return groups
-    .map((group) => {
-      const best = group.rows.slice().sort((a, b) => b.lengthScore - a.lengthScore || b.brightness - a.brightness)[0];
-      const weightedY = group.rows.reduce((sum, row) => sum + row.y * row.lengthScore, 0) / group.rows.reduce((sum, row) => sum + row.lengthScore, 0);
-      const thickness = group.rows.length;
-      const lengthScore = Math.max(...group.rows.map((row) => row.lengthScore));
-      const brightnessScore = group.rows.reduce((sum, row) => sum + row.brightness, 0) / group.rows.length / 255;
-      return { y: weightedY, thickness, lengthScore, brightnessScore, bestY: best.y };
-    })
-    .filter((line) => line.lengthScore >= 0.22)
-    .sort((a, b) => a.y - b.y);
+  return mergeNearbyGridLineRows(candidates);
 }
 
-function isGraphGridPixel(r, g, b) {
+function isGridLinePixel(r, g, b) {
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
-  const brightness = (r + g + b) / 3;
-  return max - min <= 42 && brightness >= 95;
+  const saturation = max - min;
+  const luminance = pixelLuminance(r, g, b);
+  return saturation < 35 && luminance >= 35 && luminance <= 230;
+}
+
+function pixelLuminance(r, g, b) {
+  return r * 0.299 + g * 0.587 + b * 0.114;
+}
+
+function mergeNearbyGridLineRows(rows) {
+  const merged = [];
+  rows.forEach((row) => {
+    const last = merged[merged.length - 1];
+    if (last && row.y - last.bottom <= 2) {
+      last.bottom = row.y;
+      last.sumY += row.y;
+      last.countRows += 1;
+      last.score = Math.max(last.score, row.ratio + row.runRatio);
+      last.ratio = Math.max(last.ratio, row.ratio);
+      last.runRatio = Math.max(last.runRatio, row.runRatio);
+      last.brightness = Math.max(last.brightness, row.brightness);
+      return;
+    }
+    merged.push({
+      top: row.y,
+      bottom: row.y,
+      sumY: row.y,
+      countRows: 1,
+      score: row.ratio + row.runRatio,
+      ratio: row.ratio,
+      runRatio: row.runRatio,
+      brightness: row.brightness,
+    });
+  });
+
+  return merged.map((line) => ({
+    y: Math.round(line.sumY / line.countRows),
+    top: line.top,
+    bottom: line.bottom,
+    thickness: line.bottom - line.top + 1,
+    score: line.score,
+    ratio: line.ratio,
+    runRatio: line.runRatio,
+    brightness: line.brightness,
+  }));
 }
 
 function detectZeroLineFromGridLines(gridLines, height) {
-  if (!gridLines.length) return { y: null, detected: false, reason: "no-grid-lines" };
-  const center = height * 0.5;
-  const best = gridLines
-    .map((line) => {
-      const centerPenalty = Math.abs(line.y - center) / Math.max(1, height * 0.5);
-      const score = line.thickness * 2.4 + line.lengthScore * 4 + line.brightnessScore * 2.2 - centerPenalty * 2.6;
-      return { ...line, score };
-    })
-    .sort((a, b) => b.score - a.score)[0];
-  const detected = best && best.lengthScore >= 0.25 && best.brightnessScore >= 0.40;
-  return { ...best, y: detected ? best.y : null, detected };
+  if (!gridLines.length) return Number.NaN;
+  const centerY = height / 2;
+  const scored = gridLines.map((line) => {
+    const centerScore = 1 - Math.min(1, Math.abs(line.y - centerY) / (height * 0.35));
+    const thicknessScore = Math.min(1, line.thickness / 3);
+    const brightnessScore = Math.min(1, line.brightness / 180);
+    const score = centerScore * 2 + thicknessScore + brightnessScore + line.score;
+    return { ...line, zeroScore: score };
+  });
+  scored.sort((a, b) => b.zeroScore - a.zeroScore);
+  return scored[0]?.y ?? Number.NaN;
 }
 
-function medianDistanceBetweenGridLines(gridLines, zeroLineY, height) {
-  if (!Number.isFinite(zeroLineY)) return Number.NaN;
-  const ys = uniqueSortedNumbers(gridLines.map((line) => line.y)).filter((y) => Math.abs(y - zeroLineY) > 2);
-  const near = ys.filter((y) => Math.abs(y - zeroLineY) <= height * 0.45);
-  const all = uniqueSortedNumbers([...near, zeroLineY]).sort((a, b) => a - b);
+function detectUnitHeightFromGridLines(gridLines, height) {
+  const ys = gridLines.map((line) => line.y).sort((a, b) => a - b);
   const distances = [];
-  for (let index = 1; index < all.length; index += 1) {
-    const distance = Math.abs(all[index] - all[index - 1]);
-    if (distance >= Math.max(8, height * 0.025) && distance <= height * 0.35) distances.push(distance);
+  for (let index = 1; index < ys.length; index += 1) {
+    const distance = ys[index] - ys[index - 1];
+    if (distance >= height * 0.045 && distance <= height * 0.18) distances.push(distance);
   }
   return median(distances);
 }
 
-function uniqueSortedNumbers(values) {
-  return Array.from(new Set(values.filter(Number.isFinite).map((value) => Math.round(value * 10) / 10))).sort((a, b) => a - b);
+function estimateFallbackUnitHeight(height) {
+  const graphTop = height * 0.06;
+  const graphBottom = height * 0.94;
+  const graphHeight = graphBottom - graphTop;
+  const fallback = graphHeight / 10;
+  return fallback >= height * 0.025 ? fallback : Number.NaN;
 }
 
 function median(values) {
@@ -1057,6 +1096,16 @@ function median(values) {
   const sorted = values.slice().sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function removePayoutNumberAreaFromYellowMask(mask, width, height) {
+  const cleaned = new Uint8Array(mask);
+  const left = Math.round(width * 0.55);
+  const top = Math.round(height * 0.58);
+  for (let y = top; y < height; y += 1) {
+    for (let x = left; x < width; x += 1) cleaned[y * width + x] = 0;
+  }
+  return cleaned;
 }
 
 
@@ -1684,9 +1733,9 @@ function batchMedalsNeedReview(result) {
   const medals = parseMedalsInput(result.medals);
   if (!Number.isFinite(medals)) return true;
   if (result.medalsConfirmed) return false;
-  const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下黄色数字除外済み"].includes(warning));
+  const warnings = (result.warnings || []).filter((warning) => !["数字除外済み", "右下黄色数字除外済み", "黄色線終点推定", "1000枚目盛り検出", "0ライン検出"].includes(warning));
   const memo = String(result.memo || "");
-  return warnings.some((warning) => /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗|右下表示とライン推定/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗|右下表示とライン推定/.test(memo);
+  return warnings.some((warning) => warning.startsWith("要確認") || /差枚|数字誤認識|0ライン|異常値|グラフ線|読み取り失敗/.test(warning)) || /差枚要確認|数字誤認識|読み取り失敗/.test(memo);
 }
 
 function handleBatchInput(event) {

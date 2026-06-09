@@ -233,7 +233,7 @@
             </div>
           </form>
 
-          <div class="preview-area">
+          <div class="preview-area" hidden>
             <div class="image-frame">
               <img id="previewImage" alt="アップロード画像プレビュー" />
               <div id="emptyPreview" class="empty-preview">グラフ画像を選択してください</div>
@@ -254,13 +254,13 @@
             </div>
           </div>
 
-          <details class="debug-panel">
+          <details class="debug-panel" hidden>
             <summary>デバッグログを表示</summary>
             <pre id="debugLog" class="debug-log"></pre>
           </details>
         </section>
 
-        <section class="panel confirm-panel" aria-labelledby="confirmTitle">
+        <section class="panel confirm-panel" aria-labelledby="confirmTitle" hidden>
           <div class="section-head">
             <div>
               <p class="eyebrow">Confirm</p>
