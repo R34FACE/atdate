@@ -901,7 +901,7 @@ function rectOverlapRatio(a, b) {
   return overlap / Math.max(1, smaller);
 }
 
-function analyzeGraphDiff(sourceCanvas, graphRect) {
+async function analyzeGraphDiff(sourceCanvas, graphRect) {
   const graphCanvas = cropCanvas(sourceCanvas, graphRect, { padding: 0, fill: "black" });
   const ctx = graphCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, graphCanvas.width, graphCanvas.height);
@@ -924,6 +924,7 @@ function analyzeGraphDiff(sourceCanvas, graphRect) {
   const segments = findYellowLineTraceSegments(trace, graphCanvas.width, graphCanvas.height, textBlocks);
   const endpoint = detectYellowEndpoint(segments, graphCanvas.width, graphCanvas.height, textBlocks);
   const endpointIsText = endpointLooksLikeText(endpoint, textBlocks, graphCanvas.width, graphCanvas.height);
+  const payoutTextRemoved = textBlocks.some((block) => isRectInPayoutZone(block, graphCanvas.width, graphCanvas.height));
 
   debugLog("analyzeGraphDiff", {
     graphRect,
