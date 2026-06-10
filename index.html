@@ -155,6 +155,39 @@
               <input id="recordsNumberFilter" type="search" inputmode="numeric" placeholder="例：123" />
             </label>
           </div>
+
+          <div class="bulk-tag-panel" aria-label="特日タグ一括変更">
+            <div class="bulk-tag-head">
+              <h3>特日タグ一括変更</h3>
+              <p class="field-hint">指定した日付・店舗名・機種名に一致する登録データの特日タグをまとめて変更できます。</p>
+            </div>
+            <div class="filter-row bulk-tag-fields">
+              <label>
+                日付
+                <input id="bulkTagDateInput" type="date" />
+              </label>
+              <label>
+                店舗名
+                <input id="bulkTagShopInput" type="text" list="shopCandidates" placeholder="空欄ならすべて" />
+              </label>
+              <label>
+                機種名
+                <input id="bulkTagMachineInput" type="text" list="machineCandidates" placeholder="空欄ならすべて" />
+              </label>
+              <label>
+                変更後の特日タグ
+                <input id="bulkTagValueInput" type="text" list="tagCandidates" placeholder="例：ゾロ目日 / 新台入替" />
+              </label>
+              <fieldset class="bulk-tag-mode">
+                <legend>変更方法</legend>
+                <label><input type="radio" name="bulkTagMode" value="replace" checked /> 上書き</label>
+                <label><input type="radio" name="bulkTagMode" value="append" /> 追加</label>
+              </fieldset>
+              <div class="bulk-tag-action">
+                <button class="primary-button" id="bulkTagUpdateButton" type="button">一括変更</button>
+              </div>
+            </div>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>

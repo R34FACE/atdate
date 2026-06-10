@@ -46,6 +46,11 @@ const elements = {
   recordsTagFilter: $("recordsTagFilter"),
   recordsMachineFilter: $("recordsMachineFilter"),
   recordsNumberFilter: $("recordsNumberFilter"),
+  bulkTagDateInput: $("bulkTagDateInput"),
+  bulkTagShopInput: $("bulkTagShopInput"),
+  bulkTagMachineInput: $("bulkTagMachineInput"),
+  bulkTagValueInput: $("bulkTagValueInput"),
+  bulkTagUpdateButton: $("bulkTagUpdateButton"),
   recommendShopFilter: $("recommendShopFilter"),
   recommendMachineFilter: $("recommendMachineFilter"),
   shopCandidates: $("shopCandidates"),
@@ -118,6 +123,7 @@ function bindEvents() {
     filter.addEventListener("change", renderRecords);
   });
   elements.recordsNumberFilter.addEventListener("input", renderRecords);
+  elements.bulkTagUpdateButton?.addEventListener("click", bulkUpdateTagsByCondition);
   [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
   });
@@ -1993,6 +1999,11 @@ function normalizeTag(value) {
   return uniqueSorted(splitTagString(value)).join(" / ") || "その他";
 }
 
+function mergeTags(currentTag, newTag, mode = "replace") {
+  if (mode === "replace") return normalizeTag(newTag);
+  return normalizeTag([...splitTagString(currentTag), ...splitTagString(newTag)].join(" / "));
+}
+
 function createRecordFromBatchResult(result) {
   const medals = parseMedalsInput(result.medals);
   return {
@@ -2161,7 +2172,16 @@ function renderRecords() {
         <tr>
           <td>${escapeHtml(record.date)}</td>
           <td>${escapeHtml(record.shop)}</td>
-          <td>${escapeHtml(record.tag)}</td>
+          <td>
+            <input
+              class="record-tag-input"
+              type="text"
+              list="tagCandidates"
+              data-record-tag-id="${record.id}"
+              value="${escapeHtml(record.tag)}"
+              placeholder="特日タグ"
+            />
+          </td>
           <td>${escapeHtml(record.machine)}</td>
           <td class="number-cell">${escapeHtml(record.number)}</td>
           <td class="number-cell medals-cell ${medals > 0 ? "win-text" : "lose-text"}">${formatMedals(medals)}</td>
@@ -2169,7 +2189,8 @@ function renderRecords() {
           <td>${escapeHtml(record.memo || "")}</td>
           <td>
             <div class="row-actions">
-              <button class="small-button" type="button" data-edit="${record.id}">編集</button>
+              <button class="small-button" type="button" data-bulk-tag-from="${record.id}">同日同機種へ反映</button>
+              <button class="small-button" type="button" data-edit="${record.id}">詳細編集</button>
               <button class="small-button delete" type="button" data-delete="${record.id}">削除</button>
             </div>
           </td>
@@ -2178,6 +2199,12 @@ function renderRecords() {
     })
     .join("");
 
+  elements.recordsBody.querySelectorAll("[data-record-tag-id]").forEach((input) => {
+    input.addEventListener("change", () => updateRecordTagInline(input.dataset.recordTagId, input.value, input));
+  });
+  elements.recordsBody.querySelectorAll("[data-bulk-tag-from]").forEach((button) => {
+    button.addEventListener("click", () => applyTagToSameDateMachine(button.dataset.bulkTagFrom));
+  });
   elements.recordsBody.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => editRecord(button.dataset.edit));
   });
@@ -2186,6 +2213,82 @@ function renderRecords() {
       if (confirm("この登録を削除しますか？")) deleteRecord(button.dataset.delete);
     });
   });
+}
+
+function updateRecordTagInline(id, value, input = null) {
+  const record = state.records.find((item) => item.id === id);
+  if (!record) return;
+
+  const nextTag = normalizeTag(value);
+  record.tag = nextTag;
+  if (input) input.value = nextTag;
+  addCandidate("tags", nextTag, false);
+  saveRecords();
+  saveCandidates();
+  renderCandidateControls();
+  renderSummary();
+  renderRecommendations();
+  setStatus("特日タグを保存しました");
+}
+
+function applyTagToSameDateMachine(sourceId) {
+  const source = state.records.find((record) => record.id === sourceId);
+  if (!source) return;
+
+  const newTag = normalizeTag(source.tag);
+  const targets = state.records.filter(
+    (record) => record.date === source.date && record.shop === source.shop && record.machine === source.machine
+  );
+  if (!targets.length) return;
+
+  const ok = confirm(`${source.date} / ${source.shop} / ${source.machine} の ${targets.length}件に特日タグ「${newTag}」を反映しますか？`);
+  if (!ok) return;
+
+  targets.forEach((record) => {
+    record.tag = newTag;
+  });
+
+  addCandidate("tags", newTag, false);
+  saveRecords();
+  saveCandidates();
+  renderAll();
+  setStatus(`${targets.length}件の特日タグを一括変更しました`);
+}
+
+function bulkUpdateTagsByCondition() {
+  const date = elements.bulkTagDateInput?.value || "";
+  const shop = elements.bulkTagShopInput?.value.trim() || "";
+  const machine = elements.bulkTagMachineInput?.value.trim() || "";
+  const tag = elements.bulkTagValueInput?.value.trim() || "";
+  const mode = document.querySelector('input[name="bulkTagMode"]:checked')?.value || "replace";
+
+  if (!tag) {
+    alert("変更後の特日タグを入力してください");
+    return;
+  }
+
+  const targets = state.records.filter(
+    (record) => (!date || record.date === date) && (!shop || record.shop === shop) && (!machine || record.machine === machine)
+  );
+
+  if (!targets.length) {
+    alert("対象データがありません");
+    return;
+  }
+
+  const normalizedTag = normalizeTag(tag);
+  const modeLabel = mode === "append" ? "追加" : "上書き";
+  if (!confirm(`${targets.length}件の特日タグを「${normalizedTag}」で${modeLabel}しますか？`)) return;
+
+  targets.forEach((record) => {
+    record.tag = mergeTags(record.tag, normalizedTag, mode);
+  });
+
+  addCandidate("tags", normalizedTag, false);
+  saveRecords();
+  saveCandidates();
+  renderAll();
+  setStatus(`${targets.length}件の特日タグを一括変更しました`);
 }
 
 function renderSummary() {
