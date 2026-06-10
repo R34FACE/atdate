@@ -548,6 +548,59 @@ td {
   min-width: min(260px, 100%);
 }
 
+.bulk-tag-panel {
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.bulk-tag-head {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px 0;
+}
+
+.bulk-tag-fields {
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  align-items: end;
+}
+
+.bulk-tag-mode {
+  min-height: 42px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+}
+
+.bulk-tag-mode legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.bulk-tag-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 10px;
+  color: var(--text);
+}
+
+.bulk-tag-mode input {
+  width: auto;
+  min-height: 0;
+}
+
+.bulk-tag-action {
+  display: flex;
+  align-items: end;
+}
+
+.record-tag-input {
+  min-width: 180px;
+}
+
 .field-hint {
   color: var(--muted);
   font-size: 12px;
@@ -584,7 +637,8 @@ td {
     padding-right: 6px;
   }
 
-  .filter-row {
+  .filter-row,
+  .bulk-tag-fields {
     grid-template-columns: 1fr;
   }
 

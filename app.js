@@ -46,6 +46,11 @@ const elements = {
   recordsTagFilter: $("recordsTagFilter"),
   recordsMachineFilter: $("recordsMachineFilter"),
   recordsNumberFilter: $("recordsNumberFilter"),
+  bulkTagDateInput: $("bulkTagDateInput"),
+  bulkTagShopInput: $("bulkTagShopInput"),
+  bulkTagMachineInput: $("bulkTagMachineInput"),
+  bulkTagValueInput: $("bulkTagValueInput"),
+  bulkTagUpdateButton: $("bulkTagUpdateButton"),
   recommendShopFilter: $("recommendShopFilter"),
   recommendMachineFilter: $("recommendMachineFilter"),
   shopCandidates: $("shopCandidates"),
@@ -70,6 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("dateInput").valueAsDate = new Date();
   $("tagInput").value = $("tagInput").value || DEFAULT_TAGS[0];
   state.activeTagInput = $("tagInput");
+  stripImagesFromStoredRecords();
   syncConfirmFromScan();
   seedCandidatesFromRecords();
   bindEvents();
@@ -117,6 +123,7 @@ function bindEvents() {
     filter.addEventListener("change", renderRecords);
   });
   elements.recordsNumberFilter.addEventListener("input", renderRecords);
+  elements.bulkTagUpdateButton?.addEventListener("click", bulkUpdateTagsByCondition);
   [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
   });
@@ -219,8 +226,43 @@ function loadRecords() {
   }
 }
 
+function sanitizeRecordsForStorage(records) {
+  return records.map((record) => {
+    if (!record || typeof record !== "object") return record;
+    return { ...record, image: "" };
+  });
+}
+
 function saveRecords() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.records));
+  try {
+    const sanitized = sanitizeRecordsForStorage(state.records);
+    state.records = sanitized;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+  } catch (error) {
+    console.error("localStorage保存エラー:", error);
+    throw error;
+  }
+}
+
+function stripImagesFromStoredRecords() {
+  let changed = false;
+
+  state.records = state.records.map((record) => {
+    if (record && typeof record === "object" && record.image) {
+      changed = true;
+      return { ...record, image: "" };
+    }
+    return record;
+  });
+
+  if (changed) {
+    try {
+      saveRecords();
+      console.log("既存レコードの画像データを削除しました");
+    } catch (error) {
+      console.error("既存画像データ削除後の保存に失敗しました", error);
+    }
+  }
 }
 
 function loadCandidates() {
@@ -1647,7 +1689,7 @@ function renderBatchResults() {
 function renderBatchResultCard(result, index) {
   const medals = parseMedalsInput(result.medals);
   const resultClass = Number.isFinite(medals) && medals > 0 ? "win" : "lose";
-  const status = result.saved ? "登録済み" : result.failed ? "要確認" : "未登録";
+  const status = result.saved ? "保存しました" : result.failed ? "要確認" : "未登録";
   const warningText = renderBatchWarnings(result);
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
@@ -1808,38 +1850,118 @@ function saveBatchResult(index) {
   result.saved = true;
   renderBatchResults();
   renderAll();
+  setStatus(`${index + 1}件目を保存しました`);
   return true;
 }
 
 function saveAllBatchResults() {
   if (!state.batchResults.length) return;
   const skipped = [];
-  let savedCount = 0;
+  const recordsToAdd = [];
+  const savedResults = [];
+  const remainingResults = [];
 
-  for (let index = 0; index < state.batchResults.length; index += 1) {
-    const result = state.batchResults[index];
-    if (result.saved) continue;
+  console.log("一括登録対象件数", state.batchResults.length);
+
+  state.batchResults.forEach((result, index) => {
+    if (result.saved) return;
     const missing = getBatchResultMissingFields(result);
     if (missing.length) {
       const message = `${index + 1}件目の不足項目：${missing.join("、")}`;
       result.warnings = uniqueSorted([...(result.warnings || []), message]);
       skipped.push(message);
-      continue;
+      remainingResults.push(result);
+      return;
     }
-    const record = createRecordFromBatchResult(result);
-    saveRecord(record);
-    result.saved = true;
-    savedCount += 1;
-  }
 
-  renderBatchResults();
-  renderAll();
-  if (skipped.length) {
-    setStatus(`${savedCount}件を登録、${skipped.length}件は不足項目のため未登録です`);
-    alert(`未登録の結果があります。\n${skipped.join("\n")}`);
+    recordsToAdd.push(createRecordFromBatchResult(result));
+    savedResults.push(result);
+  });
+
+  console.log("保存予定件数", recordsToAdd.length);
+  console.log("未保存件数", skipped.length);
+
+  if (!recordsToAdd.length) {
+    renderBatchResults();
+    setStatus("保存できるデータがありません。未入力項目を確認してください。");
+    if (skipped.length) alert(`未保存の結果があります。\n${skipped.join("\n")}`);
     return;
   }
-  setStatus(`${savedCount}件を登録しました`);
+
+  try {
+    saveRecordsBatch(recordsToAdd);
+  } catch (error) {
+    console.error("一括保存エラー:", error);
+
+    try {
+      stripImagesFromStoredRecords();
+      saveRecordsBatch(recordsToAdd);
+    } catch (retryError) {
+      console.error("画像削除後も一括保存に失敗:", retryError);
+      setStatus("保存に失敗しました。保存容量が不足している可能性があります。");
+      alert("保存に失敗しました。過去データの画像削除後も容量が不足しています。CSV出力後、不要データ削除を検討してください。");
+      return;
+    }
+  }
+
+  savedResults.forEach((result) => {
+    result.saved = true;
+  });
+  renderAll();
+
+  if (skipped.length) {
+    state.batchResults = remainingResults;
+    renderBatchResults();
+    setStatus(`${recordsToAdd.length}件保存しました。${skipped.length}件は不足項目があるため未保存です`);
+    alert(`未保存の結果があります。\n${skipped.join("\n")}`);
+    return;
+  }
+
+  clearBatchAfterSave(recordsToAdd.length);
+}
+
+function saveRecordsBatch(records) {
+  if (!records.length) return;
+  const previousRecords = state.records;
+  const previousCandidates = {
+    shops: [...state.candidates.shops],
+    machines: [...state.candidates.machines],
+    tags: [...state.candidates.tags],
+  };
+
+  try {
+    state.candidates.shops = uniqueSorted([...state.candidates.shops, ...records.map((record) => record.shop)]);
+    state.candidates.machines = uniqueSorted([...state.candidates.machines, ...records.map((record) => record.machine)]);
+    state.candidates.tags = uniqueSorted([...state.candidates.tags, ...records.flatMap((record) => splitTagString(record.tag))]);
+    state.records = [...records, ...state.records];
+    saveCandidates();
+    saveRecords();
+    renderCandidateControls();
+  } catch (error) {
+    state.records = previousRecords;
+    state.candidates = previousCandidates;
+    try {
+      saveCandidates();
+    } catch (candidateError) {
+      console.error("候補データ復元エラー:", candidateError);
+    }
+    throw error;
+  }
+}
+
+function clearBatchAfterSave(savedCount) {
+  state.batchResults = [];
+  state.selectedImage = "";
+  state.selectedImages = [];
+  elements.imageInput.value = "";
+  elements.previewImage.removeAttribute("src");
+  elements.previewImage.parentElement.classList.remove("has-image");
+  elements.ocrMachineNumber.textContent = "未読取";
+  elements.estimatedMedals.textContent = "未推定";
+  elements.batchResults.innerHTML = "";
+  elements.batchPanel.hidden = true;
+  setStatus(`${savedCount}件保存しました`);
+  alert(`${savedCount}件保存しました`);
 }
 
 function validateBatchResult(result) {
@@ -1877,6 +1999,11 @@ function normalizeTag(value) {
   return uniqueSorted(splitTagString(value)).join(" / ") || "その他";
 }
 
+function mergeTags(currentTag, newTag, mode = "replace") {
+  if (mode === "replace") return normalizeTag(newTag);
+  return normalizeTag([...splitTagString(currentTag), ...splitTagString(newTag)].join(" / "));
+}
+
 function createRecordFromBatchResult(result) {
   const medals = parseMedalsInput(result.medals);
   return {
@@ -1889,7 +2016,7 @@ function createRecordFromBatchResult(result) {
     medals: Number.isFinite(medals) ? medals : 0,
     result: medals > 0 ? "勝ち" : "負け",
     memo: String(result.memo || "").trim(),
-    image: result.image,
+    image: "",
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1908,7 +2035,7 @@ function createRecordFromConfirmForm() {
     medals: Number.isFinite(medalValue) ? medalValue : 0,
     result: medalValue > 0 ? "勝ち" : "負け",
     memo: existing?.memo || "",
-    image: state.selectedImage,
+    image: "",
     updatedAt: new Date().toISOString(),
   };
 }
@@ -2045,7 +2172,16 @@ function renderRecords() {
         <tr>
           <td>${escapeHtml(record.date)}</td>
           <td>${escapeHtml(record.shop)}</td>
-          <td>${escapeHtml(record.tag)}</td>
+          <td>
+            <input
+              class="record-tag-input"
+              type="text"
+              list="tagCandidates"
+              data-record-tag-id="${record.id}"
+              value="${escapeHtml(record.tag)}"
+              placeholder="特日タグ"
+            />
+          </td>
           <td>${escapeHtml(record.machine)}</td>
           <td class="number-cell">${escapeHtml(record.number)}</td>
           <td class="number-cell medals-cell ${medals > 0 ? "win-text" : "lose-text"}">${formatMedals(medals)}</td>
@@ -2053,7 +2189,8 @@ function renderRecords() {
           <td>${escapeHtml(record.memo || "")}</td>
           <td>
             <div class="row-actions">
-              <button class="small-button" type="button" data-edit="${record.id}">編集</button>
+              <button class="small-button" type="button" data-bulk-tag-from="${record.id}">同日同機種へ反映</button>
+              <button class="small-button" type="button" data-edit="${record.id}">詳細編集</button>
               <button class="small-button delete" type="button" data-delete="${record.id}">削除</button>
             </div>
           </td>
@@ -2062,6 +2199,12 @@ function renderRecords() {
     })
     .join("");
 
+  elements.recordsBody.querySelectorAll("[data-record-tag-id]").forEach((input) => {
+    input.addEventListener("change", () => updateRecordTagInline(input.dataset.recordTagId, input.value, input));
+  });
+  elements.recordsBody.querySelectorAll("[data-bulk-tag-from]").forEach((button) => {
+    button.addEventListener("click", () => applyTagToSameDateMachine(button.dataset.bulkTagFrom));
+  });
   elements.recordsBody.querySelectorAll("[data-edit]").forEach((button) => {
     button.addEventListener("click", () => editRecord(button.dataset.edit));
   });
@@ -2070,6 +2213,82 @@ function renderRecords() {
       if (confirm("この登録を削除しますか？")) deleteRecord(button.dataset.delete);
     });
   });
+}
+
+function updateRecordTagInline(id, value, input = null) {
+  const record = state.records.find((item) => item.id === id);
+  if (!record) return;
+
+  const nextTag = normalizeTag(value);
+  record.tag = nextTag;
+  if (input) input.value = nextTag;
+  addCandidate("tags", nextTag, false);
+  saveRecords();
+  saveCandidates();
+  renderCandidateControls();
+  renderSummary();
+  renderRecommendations();
+  setStatus("特日タグを保存しました");
+}
+
+function applyTagToSameDateMachine(sourceId) {
+  const source = state.records.find((record) => record.id === sourceId);
+  if (!source) return;
+
+  const newTag = normalizeTag(source.tag);
+  const targets = state.records.filter(
+    (record) => record.date === source.date && record.shop === source.shop && record.machine === source.machine
+  );
+  if (!targets.length) return;
+
+  const ok = confirm(`${source.date} / ${source.shop} / ${source.machine} の ${targets.length}件に特日タグ「${newTag}」を反映しますか？`);
+  if (!ok) return;
+
+  targets.forEach((record) => {
+    record.tag = newTag;
+  });
+
+  addCandidate("tags", newTag, false);
+  saveRecords();
+  saveCandidates();
+  renderAll();
+  setStatus(`${targets.length}件の特日タグを一括変更しました`);
+}
+
+function bulkUpdateTagsByCondition() {
+  const date = elements.bulkTagDateInput?.value || "";
+  const shop = elements.bulkTagShopInput?.value.trim() || "";
+  const machine = elements.bulkTagMachineInput?.value.trim() || "";
+  const tag = elements.bulkTagValueInput?.value.trim() || "";
+  const mode = document.querySelector('input[name="bulkTagMode"]:checked')?.value || "replace";
+
+  if (!tag) {
+    alert("変更後の特日タグを入力してください");
+    return;
+  }
+
+  const targets = state.records.filter(
+    (record) => (!date || record.date === date) && (!shop || record.shop === shop) && (!machine || record.machine === machine)
+  );
+
+  if (!targets.length) {
+    alert("対象データがありません");
+    return;
+  }
+
+  const normalizedTag = normalizeTag(tag);
+  const modeLabel = mode === "append" ? "追加" : "上書き";
+  if (!confirm(`${targets.length}件の特日タグを「${normalizedTag}」で${modeLabel}しますか？`)) return;
+
+  targets.forEach((record) => {
+    record.tag = mergeTags(record.tag, normalizedTag, mode);
+  });
+
+  addCandidate("tags", normalizedTag, false);
+  saveRecords();
+  saveCandidates();
+  renderAll();
+  setStatus(`${targets.length}件の特日タグを一括変更しました`);
 }
 
 function renderSummary() {
