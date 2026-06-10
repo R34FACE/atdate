@@ -1647,7 +1647,7 @@ function renderBatchResults() {
 function renderBatchResultCard(result, index) {
   const medals = parseMedalsInput(result.medals);
   const resultClass = Number.isFinite(medals) && medals > 0 ? "win" : "lose";
-  const status = result.saved ? "登録済み" : result.failed ? "要確認" : "未登録";
+  const status = result.saved ? "保存しました" : result.failed ? "要確認" : "未登録";
   const warningText = renderBatchWarnings(result);
   const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
@@ -1808,6 +1808,7 @@ function saveBatchResult(index) {
   result.saved = true;
   renderBatchResults();
   renderAll();
+  setStatus(`${index + 1}件目を保存しました`);
   return true;
 }
 
@@ -1823,7 +1824,7 @@ function saveAllBatchResults() {
     if (missing.length) {
       const message = `${index + 1}件目の不足項目：${missing.join("、")}`;
       result.warnings = uniqueSorted([...(result.warnings || []), message]);
-      skipped.push(message);
+      skipped.push({ message, result });
       continue;
     }
     const record = createRecordFromBatchResult(result);
@@ -1832,14 +1833,37 @@ function saveAllBatchResults() {
     savedCount += 1;
   }
 
-  renderBatchResults();
-  renderAll();
   if (skipped.length) {
-    setStatus(`${savedCount}件を登録、${skipped.length}件は不足項目のため未登録です`);
-    alert(`未登録の結果があります。\n${skipped.join("\n")}`);
+    state.batchResults = skipped.map((item) => item.result);
+    renderBatchResults();
+    renderAll();
+    setStatus(`${savedCount}件保存しました。${skipped.length}件は不足項目があるため未保存です`);
+    alert(`未保存の結果があります。\n${skipped.map((item) => item.message).join("\n")}`);
     return;
   }
-  setStatus(`${savedCount}件を登録しました`);
+
+  renderAll();
+  if (savedCount === 0) {
+    renderBatchResults();
+    setStatus("保存できる読み取り結果がありません");
+    return;
+  }
+
+  clearSavedBatchResults();
+  setStatus(`${savedCount}件保存しました`);
+}
+
+function clearSavedBatchResults() {
+  state.batchResults = [];
+  state.selectedImage = "";
+  state.selectedImages = [];
+  elements.imageInput.value = "";
+  elements.previewImage.removeAttribute("src");
+  elements.previewImage.parentElement.classList.remove("has-image");
+  elements.ocrMachineNumber.textContent = "未読取";
+  elements.estimatedMedals.textContent = "未推定";
+  elements.batchResults.innerHTML = "";
+  elements.batchPanel.hidden = true;
 }
 
 function validateBatchResult(result) {
