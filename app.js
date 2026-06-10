@@ -70,6 +70,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("dateInput").valueAsDate = new Date();
   $("tagInput").value = $("tagInput").value || DEFAULT_TAGS[0];
   state.activeTagInput = $("tagInput");
+  stripImagesFromStoredRecords();
   syncConfirmFromScan();
   seedCandidatesFromRecords();
   bindEvents();
@@ -219,12 +220,42 @@ function loadRecords() {
   }
 }
 
+function sanitizeRecordsForStorage(records) {
+  return records.map((record) => {
+    if (!record || typeof record !== "object") return record;
+    return { ...record, image: "" };
+  });
+}
+
 function saveRecords() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.records));
+    const sanitized = sanitizeRecordsForStorage(state.records);
+    state.records = sanitized;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
   } catch (error) {
     console.error("localStorage保存エラー:", error);
     throw error;
+  }
+}
+
+function stripImagesFromStoredRecords() {
+  let changed = false;
+
+  state.records = state.records.map((record) => {
+    if (record && typeof record === "object" && record.image) {
+      changed = true;
+      return { ...record, image: "" };
+    }
+    return record;
+  });
+
+  if (changed) {
+    try {
+      saveRecords();
+      console.log("既存レコードの画像データを削除しました");
+    } catch (error) {
+      console.error("既存画像データ削除後の保存に失敗しました", error);
+    }
   }
 }
 
@@ -1855,9 +1886,16 @@ function saveAllBatchResults() {
     saveRecordsBatch(recordsToAdd);
   } catch (error) {
     console.error("一括保存エラー:", error);
-    setStatus("保存に失敗しました。画像データが大きすぎる可能性があります。");
-    alert("保存に失敗しました。画像データが大きすぎる可能性があります。");
-    return;
+
+    try {
+      stripImagesFromStoredRecords();
+      saveRecordsBatch(recordsToAdd);
+    } catch (retryError) {
+      console.error("画像削除後も一括保存に失敗:", retryError);
+      setStatus("保存に失敗しました。保存容量が不足している可能性があります。");
+      alert("保存に失敗しました。過去データの画像削除後も容量が不足しています。CSV出力後、不要データ削除を検討してください。");
+      return;
+    }
   }
 
   savedResults.forEach((result) => {
@@ -1986,7 +2024,7 @@ function createRecordFromConfirmForm() {
     medals: Number.isFinite(medalValue) ? medalValue : 0,
     result: medalValue > 0 ? "勝ち" : "負け",
     memo: existing?.memo || "",
-    image: state.selectedImage,
+    image: "",
     updatedAt: new Date().toISOString(),
   };
 }
