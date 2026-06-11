@@ -230,6 +230,12 @@
               <span class="field-hint">新規追加した店舗名は登録時に候補へ保存されます。</span>
             </label>
             <label>
+              保存済み店舗から選択
+              <select id="shopSelect">
+                <option value="">選択してください</option>
+              </select>
+            </label>
+            <label>
               特日タグ
               <input id="tagInput" type="text" list="tagCandidates" placeholder="候補から選択または直接入力" />
               <span class="field-hint">保存済みタグは下の一覧から複数追加できます。</span>
@@ -256,6 +262,29 @@
               <input id="machineInput" type="text" list="machineCandidates" placeholder="候補から選択または直接入力" />
               <span class="field-hint">新規追加した機種名は登録時に候補へ保存されます。</span>
             </label>
+            <label>
+              保存済み機種から選択
+              <select id="machineSelect">
+                <option value="">選択してください</option>
+              </select>
+            </label>
+            <section class="wide machine-manager" aria-labelledby="machineManagerTitle">
+              <h3 id="machineManagerTitle">機種名管理</h3>
+              <label>
+                修正・削除する機種
+                <select id="machineManageSelect">
+                  <option value="">選択してください</option>
+                </select>
+              </label>
+              <label>
+                修正後の機種名
+                <input id="machineRenameInput" type="text" placeholder="修正後の機種名" />
+              </label>
+              <div class="button-row machine-manager-actions">
+                <button class="ghost-button" id="renameMachineButton" type="button">機種名を修正</button>
+                <button class="danger-button" id="deleteMachineButton" type="button">機種名を削除</button>
+              </div>
+            </section>
             <label class="wide">
               グラフ画像アップロード
               <input id="imageInput" type="file" accept="image/*" multiple />

@@ -53,6 +53,12 @@ const elements = {
   bulkTagUpdateButton: $("bulkTagUpdateButton"),
   recommendShopFilter: $("recommendShopFilter"),
   recommendMachineFilter: $("recommendMachineFilter"),
+  shopSelect: $("shopSelect"),
+  machineSelect: $("machineSelect"),
+  machineManageSelect: $("machineManageSelect"),
+  machineRenameInput: $("machineRenameInput"),
+  renameMachineButton: $("renameMachineButton"),
+  deleteMachineButton: $("deleteMachineButton"),
   shopCandidates: $("shopCandidates"),
   machineCandidates: $("machineCandidates"),
   tagCandidates: $("tagCandidates"),
@@ -97,6 +103,13 @@ function bindEvents() {
   [$("shopInput"), $("confirmShopInput")].forEach((input) => input.addEventListener("change", () => addCandidate("shops", input.value)));
   [$("machineInput"), $("confirmMachineInput")].forEach((input) => input.addEventListener("change", () => addCandidate("machines", input.value)));
   [$("tagInput"), $("confirmTagInput")].forEach((input) => input.addEventListener("change", () => addCandidate("tags", input.value)));
+  elements.shopSelect?.addEventListener("change", () => applyCandidateSelectToInput(elements.shopSelect, $("shopInput")));
+  elements.machineSelect?.addEventListener("change", () => applyCandidateSelectToInput(elements.machineSelect, $("machineInput")));
+  elements.machineManageSelect?.addEventListener("change", () => {
+    elements.machineRenameInput.value = elements.machineManageSelect.value;
+  });
+  elements.renameMachineButton?.addEventListener("click", renameMachineCandidate);
+  elements.deleteMachineButton?.addEventListener("click", deleteMachineCandidate);
   bindTagManagerEvents();
   elements.bulkRegisterButton.addEventListener("click", saveAllBatchResults);
   elements.batchResults.addEventListener("input", handleBatchInput);
@@ -150,6 +163,13 @@ function bindEvents() {
   });
 }
 
+function applyCandidateSelectToInput(select, input) {
+  if (!select?.value || !input) return;
+  input.value = select.value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 function bindTagManagerEvents() {
   document.addEventListener("focusin", (event) => {
     if (isTagInputElement(event.target)) state.activeTagInput = event.target;
@@ -191,6 +211,46 @@ function deleteSelectedSavedTags() {
   state.candidates.tags = state.candidates.tags.filter((tag) => !selectedKeys.has(tag.toLocaleLowerCase("ja-JP")));
   saveCandidates();
   renderCandidateControls();
+}
+
+function renameMachineCandidate() {
+  const oldName = String(elements.machineManageSelect?.value || "").trim();
+  const newName = String(elements.machineRenameInput?.value || "").trim();
+  if (!oldName || !newName) return;
+
+  const oldKey = oldName.toLocaleLowerCase("ja-JP");
+  state.candidates.machines = uniqueSorted(state.candidates.machines.map((machine) => (machine.toLocaleLowerCase("ja-JP") === oldKey ? newName : machine)));
+  saveCandidates();
+
+  if ($("machineInput").value.trim() === oldName) $("machineInput").value = newName;
+  if ($("confirmMachineInput").value.trim() === oldName) $("confirmMachineInput").value = newName;
+
+  const shouldUpdateRecords = confirm("登録済みデータ内の機種名も一緒に変更しますか？");
+  if (shouldUpdateRecords) {
+    state.records = state.records.map((record) => (record.machine === oldName ? { ...record, machine: newName, updatedAt: new Date().toISOString() } : record));
+    saveRecords();
+    renderAll();
+  } else {
+    renderCandidateControls();
+  }
+
+  elements.machineSelect.value = newName;
+  elements.machineManageSelect.value = newName;
+  elements.machineRenameInput.value = newName;
+  applyScanDefaultsToBatchResults();
+}
+
+function deleteMachineCandidate() {
+  const machineName = String(elements.machineManageSelect?.value || "").trim();
+  if (!machineName) return;
+  const confirmed = confirm(`保存済み機種候補から『${machineName}』を削除しますか？登録済みデータは削除されません。`);
+  if (!confirmed) return;
+
+  const deleteKey = machineName.toLocaleLowerCase("ja-JP");
+  state.candidates.machines = state.candidates.machines.filter((machine) => machine.toLocaleLowerCase("ja-JP") !== deleteKey);
+  saveCandidates();
+  renderCandidateControls();
+  elements.machineRenameInput.value = "";
 }
 
 function getSelectedSavedTags() {
@@ -328,6 +388,9 @@ function renderCandidateControls() {
   renderDatalist(elements.machineCandidates, state.candidates.machines);
   renderDatalist(elements.tagCandidates, state.candidates.tags);
   renderSavedTagList();
+  renderSelectOptions(elements.shopSelect, state.candidates.shops, "選択してください");
+  renderSelectOptions(elements.machineSelect, state.candidates.machines, "選択してください");
+  renderSelectOptions(elements.machineManageSelect, state.candidates.machines, "選択してください");
   renderSelectOptions(elements.summaryShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
@@ -357,10 +420,12 @@ function renderSavedTagList() {
 }
 
 function renderDatalist(element, values) {
+  if (!element) return;
   element.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
 }
 
 function renderSelectOptions(select, values, placeholder) {
+  if (!select) return;
   const current = select.value;
   select.innerHTML = `<option value="">${placeholder}</option>${values
     .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
