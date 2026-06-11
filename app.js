@@ -1706,8 +1706,7 @@ function findGraphEndPoint(data, width, height) {
 
 function applyScanDefaultsToBatchResults() {
   if (!state.batchResults.length) return;
-  const defaults = getScanDefaults();
-  state.batchResults = state.batchResults.map((result) => ({ ...result, ...defaults, saved: false }));
+  state.batchResults = state.batchResults.map((result) => ({ ...result, saved: false }));
   renderBatchResults();
 }
 
@@ -1755,8 +1754,6 @@ function renderBatchResultCard(result, index) {
   const medals = parseMedalsInput(result.medals);
   const resultClass = Number.isFinite(medals) && medals > 0 ? "win" : "lose";
   const status = result.saved ? "保存しました" : result.failed ? "要確認" : "未登録";
-  const warningText = renderBatchWarnings(result);
-  const memo = uniqueSorted([result.memo || "", warningText].filter(Boolean)).join(" / ");
   return `
     <article class="batch-result-card ${result.saved ? "saved" : ""} ${result.failed ? "needs-review" : ""}" data-batch-card="${index}">
       <header class="batch-card-head">
@@ -1771,7 +1768,7 @@ function renderBatchResultCard(result, index) {
           <img class="batch-graph-image" src="${escapeHtml(result.image)}" alt="読み取りグラフ ${index + 1}" />
         </figure>
         <div class="batch-card-fields">
-          <p class="batch-memo-preview">${escapeHtml(memo || "メモなし")}</p>
+          ${renderBatchReviewMemo(result)}
           <div class="batch-field-grid">
             <label>
               台番号
@@ -1785,34 +1782,6 @@ function renderBatchResultCard(result, index) {
               勝敗
               <span class="batch-result-text ${resultClass}">${Number.isFinite(medals) ? (medals > 0 ? "勝ち" : "負け") : "要確認"}</span>
             </label>
-            <label>
-              店舗名
-              <input type="text" list="shopCandidates" data-batch-index="${index}" data-batch-field="shop" value="${escapeHtml(result.shop)}" required />
-            </label>
-            <label>
-              機種名
-              <input type="text" list="machineCandidates" data-batch-index="${index}" data-batch-field="machine" value="${escapeHtml(result.machine)}" required />
-            </label>
-            <label>
-              日付
-              <input type="date" data-batch-index="${index}" data-batch-field="date" value="${escapeHtml(result.date)}" required />
-            </label>
-            <label>
-              特日タグ
-              <input
-                type="text"
-                list="tagCandidates"
-                data-batch-index="${index}"
-                data-batch-field="tag"
-                value="${escapeHtml(result.tag)}"
-                placeholder="候補から選択または直接入力"
-                required
-              />
-            </label>
-            <label class="batch-memo-field">
-              メモ
-              <textarea data-batch-index="${index}" data-batch-field="memo" rows="2" placeholder="要確認メモ">${escapeHtml(memo)}</textarea>
-            </label>
           </div>
           <div class="button-row batch-card-actions">
             <button class="primary-button" type="button" data-batch-save="${index}" ${result.saved ? "disabled" : ""}>この1件を登録</button>
@@ -1821,6 +1790,18 @@ function renderBatchResultCard(result, index) {
       </div>
     </article>
   `;
+}
+
+function renderBatchReviewMemo(result) {
+  const warnings = [...(result.warnings || [])];
+  const memo = String(result.memo || "");
+  const reviewMessages = uniqueSorted(
+    [...warnings, memo]
+      .filter(Boolean)
+      .filter((message) => message.includes("要確認") || message.includes("失敗") || message.includes("未検出"))
+  );
+  if (!reviewMessages.length) return "";
+  return `<p class="batch-review-memo">${escapeHtml(reviewMessages.join(" / "))}</p>`;
 }
 
 function formatBatchHeading(result) {
@@ -1850,21 +1831,18 @@ function handleBatchInput(event) {
   if (!input) return;
   const index = Number(input.dataset.batchIndex);
   const field = input.dataset.batchField;
+  if (!["number", "medals"].includes(field)) return;
   const result = state.batchResults[index];
   if (!result) return;
   result[field] = field === "medals" ? input.value : input.value.trim();
   result.saved = false;
   if (field === "medals") result.medalsConfirmed = true;
-  if (field === "memo") result.warnings = [];
-  if (event.type === "change" && field === "shop") addCandidate("shops", result[field]);
-  if (event.type === "change" && field === "machine") addCandidate("machines", result[field]);
-  if (event.type === "change" && field === "tag") addCandidate("tags", result[field]);
 
   const card = input.closest(".batch-result-card");
   const saveButton = card?.querySelector("[data-batch-save]");
   if (saveButton) saveButton.disabled = false;
   card?.classList.remove("saved");
-  if (field === "medals" || field === "number" || field === "memo") updateBatchResultBanner(card, result);
+  updateBatchResultBanner(card, result);
 }
 
 function updateBatchResultBanner(card, result) {
@@ -2034,10 +2012,11 @@ function validateBatchResult(result) {
 }
 
 function getBatchResultMissingFields(result) {
+  const defaults = getScanDefaults();
   const missing = [];
-  if (!result.date) missing.push("日付");
-  if (!String(result.shop || "").trim()) missing.push("店舗名");
-  if (!String(result.machine || "").trim()) missing.push("機種名");
+  if (!defaults.date) missing.push("日付");
+  if (!String(defaults.shop || "").trim()) missing.push("店舗名");
+  if (!String(defaults.machine || "").trim()) missing.push("機種名");
   if (!String(result.number || "").trim()) missing.push("台番号");
   if (String(result.medals ?? "").trim() === "" || !Number.isFinite(parseMedalsInput(result.medals))) missing.push("差枚");
   return missing;
@@ -2070,13 +2049,15 @@ function mergeTags(currentTag, newTag, mode = "replace") {
 }
 
 function createRecordFromBatchResult(result) {
+  const defaults = getScanDefaults();
   const medals = parseMedalsInput(result.medals);
+
   return {
     id: crypto.randomUUID(),
-    date: result.date,
-    shop: String(result.shop || "").trim(),
-    tag: normalizeTag(result.tag),
-    machine: String(result.machine || "").trim(),
+    date: defaults.date,
+    shop: defaults.shop,
+    tag: normalizeTag(defaults.tag),
+    machine: defaults.machine,
     number: String(result.number || "").trim(),
     medals: Number.isFinite(medals) ? medals : 0,
     result: medals > 0 ? "勝ち" : "負け",
@@ -2233,29 +2214,99 @@ function renderRecords() {
   elements.recordsBody.innerHTML = filtered
     .map((record) => {
       const medals = getRecordMedals(record);
+      const resultClass = medals > 0 ? "win-text" : "lose-text";
+      const machineOptions = state.candidates.machines
+        .map(
+          (machine) => `
+            <option value="${escapeHtml(machine)}" ${machine === record.machine ? "selected" : ""}>
+              ${escapeHtml(machine)}
+            </option>
+          `
+        )
+        .join("");
       return `
         <tr>
-          <td>${escapeHtml(record.date)}</td>
-          <td>${escapeHtml(record.shop)}</td>
+          <td>
+            <input
+              class="record-date-input"
+              type="date"
+              data-record-field-id="${record.id}"
+              data-record-field="date"
+              value="${escapeHtml(record.date)}"
+            />
+          </td>
+          <td>
+            <input
+              class="record-shop-input"
+              type="text"
+              list="shopCandidates"
+              data-record-field-id="${record.id}"
+              data-record-field="shop"
+              value="${escapeHtml(record.shop)}"
+              placeholder="店舗名"
+            />
+          </td>
           <td>
             <input
               class="record-tag-input"
               type="text"
               list="tagCandidates"
-              data-record-tag-id="${record.id}"
+              data-record-field-id="${record.id}"
+              data-record-field="tag"
               value="${escapeHtml(record.tag)}"
               placeholder="特日タグ"
             />
           </td>
-          <td>${escapeHtml(record.machine)}</td>
-          <td class="number-cell">${escapeHtml(record.number)}</td>
-          <td class="number-cell medals-cell ${medals > 0 ? "win-text" : "lose-text"}">${formatMedals(medals)}</td>
-          <td class="${medals > 0 ? "win-text" : "lose-text"}">${medals > 0 ? "勝ち" : "負け"}</td>
-          <td>${escapeHtml(record.memo || "")}</td>
+          <td>
+            <input
+              class="record-machine-input"
+              type="text"
+              list="machineCandidates"
+              data-record-field-id="${record.id}"
+              data-record-field="machine"
+              value="${escapeHtml(record.machine)}"
+              placeholder="機種名"
+            />
+            <select class="record-machine-select" data-record-machine-select-id="${record.id}">
+              <option value="">保存済み機種から選択</option>
+              ${machineOptions}
+            </select>
+          </td>
+          <td class="number-cell">
+            <input
+              class="record-number-input"
+              type="text"
+              inputmode="numeric"
+              data-record-field-id="${record.id}"
+              data-record-field="number"
+              value="${escapeHtml(record.number)}"
+              placeholder="台番号"
+            />
+          </td>
+          <td class="number-cell medals-cell ${resultClass}">
+            <input
+              class="record-medals-input"
+              type="text"
+              data-record-field-id="${record.id}"
+              data-record-field="medals"
+              value="${escapeHtml(record.medals)}"
+              placeholder="例：-500"
+            />
+          </td>
+          <td class="${resultClass}">${medals > 0 ? "勝ち" : "負け"}</td>
+          <td>
+            <input
+              class="record-memo-input"
+              type="text"
+              data-record-field-id="${record.id}"
+              data-record-field="memo"
+              value="${escapeHtml(record.memo || "")}"
+              placeholder="メモ"
+            />
+          </td>
           <td>
             <div class="row-actions">
               <button class="small-button" type="button" data-bulk-tag-from="${record.id}">同日同機種へ反映</button>
-              <button class="small-button" type="button" data-edit="${record.id}">詳細編集</button>
               <button class="small-button delete" type="button" data-delete="${record.id}">削除</button>
             </div>
           </td>
@@ -2264,14 +2315,23 @@ function renderRecords() {
     })
     .join("");
 
-  elements.recordsBody.querySelectorAll("[data-record-tag-id]").forEach((input) => {
-    input.addEventListener("change", () => updateRecordTagInline(input.dataset.recordTagId, input.value, input));
+  elements.recordsBody.querySelectorAll("[data-record-field-id][data-record-field]").forEach((input) => {
+    input.addEventListener("change", () => {
+      updateRecordFieldInline(input.dataset.recordFieldId, input.dataset.recordField, input.value);
+    });
+  });
+  elements.recordsBody.querySelectorAll("[data-record-machine-select-id]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const id = select.dataset.recordMachineSelectId;
+      const value = select.value;
+      if (!value) return;
+      const input = select.closest("tr")?.querySelector('[data-record-field="machine"]');
+      if (input) input.value = value;
+      updateRecordFieldInline(id, "machine", value);
+    });
   });
   elements.recordsBody.querySelectorAll("[data-bulk-tag-from]").forEach((button) => {
     button.addEventListener("click", () => applyTagToSameDateMachine(button.dataset.bulkTagFrom));
-  });
-  elements.recordsBody.querySelectorAll("[data-edit]").forEach((button) => {
-    button.addEventListener("click", () => editRecord(button.dataset.edit));
   });
   elements.recordsBody.querySelectorAll("[data-delete]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2280,20 +2340,70 @@ function renderRecords() {
   });
 }
 
-function updateRecordTagInline(id, value, input = null) {
+function updateRecordFieldInline(id, field, value) {
   const record = state.records.find((item) => item.id === id);
   if (!record) return;
 
-  const nextTag = normalizeTag(value);
-  record.tag = nextTag;
-  if (input) input.value = nextTag;
-  addCandidate("tags", nextTag, false);
+  if (field === "date") {
+    record.date = value;
+  }
+
+  if (field === "shop") {
+    const shop = String(value || "").trim();
+    if (!shop) {
+      alert("店舗名を入力してください。");
+      renderRecords();
+      return;
+    }
+    record.shop = shop;
+    addCandidate("shops", shop, false);
+  }
+
+  if (field === "tag") {
+    record.tag = normalizeTag(value);
+    addCandidate("tags", record.tag, false);
+  }
+
+  if (field === "machine") {
+    const machine = String(value || "").trim();
+    if (!machine) {
+      alert("機種名を入力してください。");
+      renderRecords();
+      return;
+    }
+    record.machine = machine;
+    addCandidate("machines", machine, false);
+  }
+
+  if (field === "number") {
+    record.number = String(value || "").trim();
+  }
+
+  if (field === "medals") {
+    const medals = parseMedalsInput(value);
+    if (!Number.isFinite(medals)) {
+      alert("差枚を正しく入力してください。例：-500");
+      renderRecords();
+      return;
+    }
+    record.medals = medals;
+    record.result = medals > 0 ? "勝ち" : "負け";
+  }
+
+  if (field === "memo") {
+    record.memo = String(value || "").trim();
+  }
+
+  record.updatedAt = new Date().toISOString();
+
   saveRecords();
   saveCandidates();
   renderCandidateControls();
   renderSummary();
   renderRecommendations();
-  setStatus("特日タグを保存しました");
+  renderRecords();
+
+  setStatus("一覧の修正を保存しました");
 }
 
 function applyTagToSameDateMachine(sourceId) {
