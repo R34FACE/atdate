@@ -597,26 +597,8 @@ td {
   align-items: end;
 }
 
-.record-date-input {
-  min-width: 140px;
-}
-
-.record-shop-input,
-.record-tag-input,
-.record-machine-input,
-.record-memo-input {
+.record-tag-input {
   min-width: 180px;
-}
-
-.record-number-input,
-.record-medals-input {
-  min-width: 96px;
-  text-align: right;
-}
-
-.record-machine-select {
-  min-width: 180px;
-  margin-top: 6px;
 }
 
 .field-hint {
