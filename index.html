@@ -53,6 +53,11 @@
               <select id="recommendMachineFilter"><option value="">すべて</option></select>
             </label>
           </div>
+          <p class="placement-period" id="recommendPlacementPeriod">店舗がすべての場合：各店舗の配置変更設定に基づいて判定します。</p>
+          <label class="check-label placement-check">
+            <input id="recommendIncludeOldPlacement" type="checkbox" />
+            旧配置データも含める
+          </label>
           <div class="table-wrap">
             <table class="recommend-table">
               <thead>
@@ -112,6 +117,11 @@
               <input id="summaryEndDateFilter" type="date" />
             </label>
           </div>
+          <p class="placement-period" id="summaryPlacementPeriod">店舗がすべての場合：各店舗の配置変更設定に基づいて判定します。</p>
+          <label class="check-label placement-check">
+            <input id="summaryIncludeOldPlacement" type="checkbox" />
+            旧配置データも含める
+          </label>
           <div class="table-wrap">
             <table>
               <thead id="summaryHead"></thead>
@@ -154,7 +164,39 @@
               台番号
               <input id="recordsNumberFilter" type="search" inputmode="numeric" placeholder="例：123" />
             </label>
+            <label>
+              配置区分
+              <select id="recordsPlacementFilter">
+                <option value="">すべて</option>
+                <option value="current">現在配置</option>
+                <option value="old">旧配置</option>
+              </select>
+            </label>
           </div>
+
+          <section class="analysis-settings-panel" aria-labelledby="analysisSettingsTitle">
+            <div class="bulk-tag-head">
+              <h3 id="analysisSettingsTitle">配置変更設定</h3>
+              <p class="field-hint">店舗ごとに、集計・おすすめで使用する現在配置データの開始日を設定できます。一覧とCSV出力には全データを残します。</p>
+            </div>
+            <div class="filter-row analysis-settings-fields">
+              <label>
+                店舗名
+                <select id="analysisShopSelect">
+                  <option value="">店舗を選択</option>
+                </select>
+              </label>
+              <label>
+                現在配置の集計開始日
+                <input id="analysisStartDateInput" type="date" />
+              </label>
+              <div class="button-row analysis-settings-actions">
+                <button class="primary-button" id="saveAnalysisStartDateButton" type="button">開始日を保存</button>
+                <button class="ghost-button" id="clearAnalysisStartDateButton" type="button">設定を解除</button>
+              </div>
+            </div>
+            <p class="analysis-setting-status" id="analysisSettingStatus"></p>
+          </section>
 
           <div class="bulk-tag-panel" aria-label="特日タグ一括変更">
             <div class="bulk-tag-head">
@@ -192,6 +234,7 @@
             <table>
               <thead>
                 <tr>
+                  <th>配置</th>
                   <th>日付</th>
                   <th>店舗名</th>
                   <th>特日タグ</th>
