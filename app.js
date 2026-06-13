@@ -1,5 +1,6 @@
 const STORAGE_KEY = "atSlotSpecialDayRecords";
 const CANDIDATE_STORAGE_KEY = "atSlotNameCandidates";
+const ANALYSIS_SETTINGS_KEY = "atSlotAnalysisSettings";
 const DEFAULT_TAGS = ["ゾロ目日", "7の日", "周年", "月イチ", "新台入替", "旧イベ", "媒体系", "その他"];
 
 const state = {
@@ -11,6 +12,9 @@ const state = {
   activeView: "recommend",
   candidates: loadCandidates(),
   activeTagInput: null,
+  analysisSettings: loadAnalysisSettings(),
+  includeOldPlacementInSummary: false,
+  includeOldPlacementInRecommendations: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -46,6 +50,7 @@ const elements = {
   recordsTagFilter: $("recordsTagFilter"),
   recordsMachineFilter: $("recordsMachineFilter"),
   recordsNumberFilter: $("recordsNumberFilter"),
+  recordsPlacementFilter: $("recordsPlacementFilter"),
   bulkTagDateInput: $("bulkTagDateInput"),
   bulkTagShopInput: $("bulkTagShopInput"),
   bulkTagMachineInput: $("bulkTagMachineInput"),
@@ -53,6 +58,8 @@ const elements = {
   bulkTagUpdateButton: $("bulkTagUpdateButton"),
   recommendShopFilter: $("recommendShopFilter"),
   recommendMachineFilter: $("recommendMachineFilter"),
+  recommendIncludeOldPlacement: $("recommendIncludeOldPlacement"),
+  recommendPlacementPeriod: $("recommendPlacementPeriod"),
   shopSelect: $("shopSelect"),
   machineSelect: $("machineSelect"),
   machineManageSelect: $("machineManageSelect"),
@@ -74,6 +81,13 @@ const elements = {
   recordsExportCsvButton: $("recordsExportCsvButton"),
   recordsImportCsvInput: $("recordsImportCsvInput"),
   clearAllRecordsButton: $("clearAllRecordsButton"),
+  summaryIncludeOldPlacement: $("summaryIncludeOldPlacement"),
+  summaryPlacementPeriod: $("summaryPlacementPeriod"),
+  analysisShopSelect: $("analysisShopSelect"),
+  analysisStartDateInput: $("analysisStartDateInput"),
+  saveAnalysisStartDateButton: $("saveAnalysisStartDateButton"),
+  clearAnalysisStartDateButton: $("clearAnalysisStartDateButton"),
+  analysisSettingStatus: $("analysisSettingStatus"),
   debugLog: $("debugLog"),
 };
 
@@ -132,14 +146,25 @@ function bindEvents() {
   ].forEach((filter) => {
     filter.addEventListener("change", renderSummary);
   });
-  [elements.recordsShopFilter, elements.recordsTagFilter, elements.recordsMachineFilter].forEach((filter) => {
-    filter.addEventListener("change", renderRecords);
+  [elements.recordsShopFilter, elements.recordsTagFilter, elements.recordsMachineFilter, elements.recordsPlacementFilter].forEach((filter) => {
+    filter?.addEventListener("change", renderRecords);
   });
   elements.recordsNumberFilter.addEventListener("input", renderRecords);
   elements.bulkTagUpdateButton?.addEventListener("click", bulkUpdateTagsByCondition);
   [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
   });
+  elements.summaryIncludeOldPlacement?.addEventListener("change", () => {
+    state.includeOldPlacementInSummary = elements.summaryIncludeOldPlacement.checked;
+    renderSummary();
+  });
+  elements.recommendIncludeOldPlacement?.addEventListener("change", () => {
+    state.includeOldPlacementInRecommendations = elements.recommendIncludeOldPlacement.checked;
+    renderRecommendations();
+  });
+  elements.analysisShopSelect?.addEventListener("change", syncAnalysisStartDateInput);
+  elements.saveAnalysisStartDateButton?.addEventListener("click", saveAnalysisStartDate);
+  elements.clearAnalysisStartDateButton?.addEventListener("click", clearAnalysisStartDate);
   elements.recommendTagInput.addEventListener("input", renderRecommendations);
   elements.recommendTagInput.addEventListener("change", () => {
     addCandidate("tags", elements.recommendTagInput.value);
@@ -278,6 +303,34 @@ function recordMatchesTag(recordTag, filterTag) {
   return splitTagString(recordTag).some((tag) => tag === filter || tag.includes(filter)) || String(recordTag || "").includes(filter);
 }
 
+function loadAnalysisSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ANALYSIS_SETTINGS_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAnalysisSettings() {
+  localStorage.setItem(ANALYSIS_SETTINGS_KEY, JSON.stringify(state.analysisSettings));
+}
+
+function isCurrentPlacementRecord(record) {
+  const setting = state.analysisSettings[record.shop];
+  const startDate = setting?.startDate;
+  if (!startDate) return true;
+  return String(record.date || "") >= startDate;
+}
+
+function getSummarySourceRecords() {
+  return state.includeOldPlacementInSummary ? state.records : state.records.filter(isCurrentPlacementRecord);
+}
+
+function getRecommendationSourceRecords() {
+  return state.includeOldPlacementInRecommendations ? state.records : state.records.filter(isCurrentPlacementRecord);
+}
+
 function loadRecords() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -394,11 +447,13 @@ function renderCandidateControls() {
   renderSelectOptions(elements.summaryShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.summaryMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recordsShopFilter, state.candidates.shops, "すべて");
+  renderSelectOptions(elements.analysisShopSelect, state.candidates.shops, "店舗を選択");
   renderSelectOptions(elements.recordsMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.recommendShopFilter, state.candidates.shops, "すべて");
   renderSelectOptions(elements.recommendMachineFilter, state.candidates.machines, "すべて");
   renderSelectOptions(elements.summaryTagFilter, state.candidates.tags, "すべて");
   renderSelectOptions(elements.recordsTagFilter, state.candidates.tags, "すべて");
+  syncAnalysisStartDateInput();
 }
 
 function renderSavedTagList() {
@@ -2204,10 +2259,11 @@ function renderRecords() {
     tag: elements.recordsTagFilter.value,
     machine: elements.recordsMachineFilter.value,
     number: elements.recordsNumberFilter.value.trim(),
+    placement: elements.recordsPlacementFilter?.value || "",
   });
 
   if (!filtered.length) {
-    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="9">登録データがありません</td></tr>`;
+    elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="10">登録データがありません</td></tr>`;
     return;
   }
 
@@ -2215,6 +2271,7 @@ function renderRecords() {
     .map((record) => {
       const medals = getRecordMedals(record);
       const resultClass = medals > 0 ? "win-text" : "lose-text";
+      const oldPlacement = !isCurrentPlacementRecord(record);
       const machineOptions = state.candidates.machines
         .map(
           (machine) => `
@@ -2226,6 +2283,9 @@ function renderRecords() {
         .join("");
       return `
         <tr>
+          <td>
+            <span class="placement-badge ${oldPlacement ? "old-placement-badge" : "current-placement-badge"}">${oldPlacement ? "旧配置" : "現在配置"}</span>
+          </td>
           <td>
             <input
               class="record-date-input"
@@ -2468,7 +2528,9 @@ function bulkUpdateTagsByCondition() {
 
 function renderSummary() {
   const mode = state.summaryMode;
-  const summaryRecords = applyFilters(state.records, {
+  const sourceRecords = getSummarySourceRecords();
+  renderPlacementPeriod(elements.summaryPlacementPeriod, elements.summaryShopFilter.value);
+  const summaryRecords = applyFilters(sourceRecords, {
     shop: elements.summaryShopFilter.value,
     tag: elements.summaryTagFilter.value,
     machine: elements.summaryMachineFilter.value,
@@ -2521,7 +2583,9 @@ function renderSummary() {
 }
 
 function renderRecommendations() {
-  const filtered = applyFilters(state.records, {
+  const sourceRecords = getRecommendationSourceRecords();
+  renderPlacementPeriod(elements.recommendPlacementPeriod, elements.recommendShopFilter.value);
+  const filtered = applyFilters(sourceRecords, {
     shop: elements.recommendShopFilter.value,
     tag: elements.recommendTagInput.value,
     machine: elements.recommendMachineFilter.value,
@@ -2557,6 +2621,59 @@ function renderRecommendations() {
     .join("");
 }
 
+
+function saveAnalysisStartDate() {
+  const shop = elements.analysisShopSelect.value;
+  const startDate = elements.analysisStartDateInput.value;
+  if (!shop) {
+    alert("店舗名を選択してください。");
+    return;
+  }
+  if (!startDate) {
+    alert("集計開始日を選択してください。");
+    return;
+  }
+  state.analysisSettings[shop] = { startDate };
+  saveAnalysisSettings();
+  renderAll();
+  setAnalysisSettingStatus(`${shop}の集計開始日を${startDate}に設定しました`);
+}
+
+function clearAnalysisStartDate() {
+  const shop = elements.analysisShopSelect.value;
+  if (!shop) return;
+  delete state.analysisSettings[shop];
+  saveAnalysisSettings();
+  elements.analysisStartDateInput.value = "";
+  renderAll();
+  setAnalysisSettingStatus(`${shop}の集計開始日設定を解除しました`);
+}
+
+function syncAnalysisStartDateInput() {
+  const shop = elements.analysisShopSelect?.value || "";
+  if (elements.analysisStartDateInput) elements.analysisStartDateInput.value = state.analysisSettings[shop]?.startDate || "";
+}
+
+function setAnalysisSettingStatus(message) {
+  if (elements.analysisSettingStatus) elements.analysisSettingStatus.textContent = message;
+}
+
+function renderPlacementPeriod(element, shop) {
+  if (!element) return;
+  if (!shop) {
+    element.textContent = "店舗がすべての場合：各店舗の配置変更設定に基づいて判定します。";
+    return;
+  }
+  const startDate = state.analysisSettings[shop]?.startDate;
+  element.textContent = startDate ? `現在配置の集計対象：${formatJapaneseDate(startDate)}以降` : "集計対象開始日の設定なし：全期間を使用";
+}
+
+function formatJapaneseDate(dateString) {
+  const [year, month, day] = String(dateString || "").split("-");
+  if (!year || !month || !day) return dateString;
+  return `${Number(year)}年${Number(month)}月${Number(day)}日`;
+}
+
 function recommendationReason(item) {
   const rate = Math.round(item.winRate * 100);
   if (item.count < 2) return `データ不足（登録${item.count}回）。AT機は荒れやすいため、1回だけの大勝ちは参考扱いです。`;
@@ -2586,6 +2703,8 @@ function applyFilters(records, filters) {
     if (filters.number && !String(record.number || "").includes(filters.number)) return false;
     if (filters.startDate && String(record.date || "") < filters.startDate) return false;
     if (filters.endDate && String(record.date || "") > filters.endDate) return false;
+    if (filters.placement === "current" && !isCurrentPlacementRecord(record)) return false;
+    if (filters.placement === "old" && isCurrentPlacementRecord(record)) return false;
     return true;
   });
 }

@@ -1229,3 +1229,67 @@ button:disabled {
     justify-content: stretch;
   }
 }
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.check-label input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+}
+
+.placement-check,
+.placement-period {
+  margin: 12px 18px 0;
+}
+
+.placement-period {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.placement-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.current-placement-badge {
+  color: var(--primary-dark);
+  background: rgba(15, 118, 110, 0.12);
+}
+
+.old-placement-badge {
+  color: var(--accent);
+  background: rgba(194, 65, 12, 0.12);
+}
+
+.analysis-settings-panel {
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.analysis-settings-fields {
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  align-items: end;
+}
+
+.analysis-settings-actions {
+  align-self: end;
+}
+
+.analysis-setting-status {
+  padding: 0 18px 14px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+}
