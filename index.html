@@ -230,6 +230,21 @@
               </div>
             </div>
           </div>
+          <div class="records-pagination" aria-label="登録データページ送り">
+            <button id="recordsPrevPageButton" type="button">前へ</button>
+            <span id="recordsPageInfo">1 / 1ページ（全0件）</span>
+            <label>
+              表示件数
+              <select id="recordsPageSizeSelect">
+                <option value="50" selected>50件</option>
+                <option value="100">100件</option>
+                <option value="200">200件</option>
+                <option value="all">全件</option>
+              </select>
+            </label>
+            <button id="recordsNextPageButton" type="button">次へ</button>
+          </div>
+          <p class="records-count-info" id="recordsCountInfo">全0件中 0件を表示</p>
           <div class="table-wrap">
             <table>
               <thead>

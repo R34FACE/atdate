@@ -614,9 +614,30 @@ td {
   text-align: right;
 }
 
-.record-machine-select {
-  min-width: 180px;
-  margin-top: 6px;
+.records-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 8px;
+}
+
+.records-pagination label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+}
+
+.records-pagination select {
+  min-height: 36px;
+}
+
+.records-count-info {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .field-hint {

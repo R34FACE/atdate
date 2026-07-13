@@ -15,10 +15,21 @@ const state = {
   analysisSettings: loadAnalysisSettings(),
   includeOldPlacementInSummary: false,
   includeOldPlacementInRecommendations: false,
+  recordsPage: 1,
+  recordsPageSize: 50,
+  recordsRenderToken: 0,
 };
 
 const $ = (id) => document.getElementById(id);
 const yen = new Intl.NumberFormat("ja-JP");
+
+function debounce(fn, delay = 250) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
 
 const elements = {
   scanForm: $("scanForm"),
@@ -51,6 +62,11 @@ const elements = {
   recordsMachineFilter: $("recordsMachineFilter"),
   recordsNumberFilter: $("recordsNumberFilter"),
   recordsPlacementFilter: $("recordsPlacementFilter"),
+  recordsPrevPageButton: $("recordsPrevPageButton"),
+  recordsNextPageButton: $("recordsNextPageButton"),
+  recordsPageInfo: $("recordsPageInfo"),
+  recordsPageSizeSelect: $("recordsPageSizeSelect"),
+  recordsCountInfo: $("recordsCountInfo"),
   bulkTagDateInput: $("bulkTagDateInput"),
   bulkTagShopInput: $("bulkTagShopInput"),
   bulkTagMachineInput: $("bulkTagMachineInput"),
@@ -147,9 +163,33 @@ function bindEvents() {
     filter.addEventListener("change", renderSummary);
   });
   [elements.recordsShopFilter, elements.recordsTagFilter, elements.recordsMachineFilter, elements.recordsPlacementFilter].forEach((filter) => {
-    filter?.addEventListener("change", renderRecords);
+    filter?.addEventListener("change", () => {
+      state.recordsPage = 1;
+      renderRecords();
+    });
   });
-  elements.recordsNumberFilter.addEventListener("input", renderRecords);
+  elements.recordsNumberFilter.addEventListener(
+    "input",
+    debounce(() => {
+      state.recordsPage = 1;
+      renderRecords();
+    }, 250)
+  );
+  elements.recordsPageSizeSelect?.addEventListener("change", () => {
+    state.recordsPageSize = elements.recordsPageSizeSelect.value === "all" ? "all" : Number(elements.recordsPageSizeSelect.value) || 50;
+    state.recordsPage = 1;
+    renderRecords();
+  });
+  elements.recordsPrevPageButton?.addEventListener("click", () => {
+    state.recordsPage = Math.max(1, state.recordsPage - 1);
+    renderRecords();
+  });
+  elements.recordsNextPageButton?.addEventListener("click", () => {
+    state.recordsPage += 1;
+    renderRecords();
+  });
+  elements.recordsBody.addEventListener("change", handleRecordsBodyChange);
+  elements.recordsBody.addEventListener("click", handleRecordsBodyClick);
   elements.bulkTagUpdateButton?.addEventListener("click", bulkUpdateTagsByCondition);
   [elements.recommendShopFilter, elements.recommendMachineFilter].forEach((filter) => {
     filter.addEventListener("change", renderRecommendations);
@@ -500,6 +540,9 @@ function switchView(view) {
     panel.classList.toggle("active", isActive);
     panel.hidden = !isActive;
   });
+  if (view === "records") renderRecords();
+  if (view === "summary") renderSummary();
+  if (view === "recommend") renderRecommendations();
 }
 
 async function handleImageSelect(event) {
@@ -2248,12 +2291,22 @@ function updateWinLoseBanner() {
 
 function renderAll() {
   renderCandidateControls();
-  renderRecords();
-  renderSummary();
-  renderRecommendations();
+  if (state.activeView === "records") renderRecords();
+  if (state.activeView === "summary") renderSummary();
+  if (state.activeView === "recommend") renderRecommendations();
 }
 
 function renderRecords() {
+  const token = ++state.recordsRenderToken;
+  elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="10">読み込み中...</td></tr>`;
+
+  requestAnimationFrame(() => {
+    if (token !== state.recordsRenderToken) return;
+    renderRecordsBody();
+  });
+}
+
+function renderRecordsBody() {
   const filtered = applyFilters(state.records, {
     shop: elements.recordsShopFilter.value,
     tag: elements.recordsTagFilter.value,
@@ -2262,107 +2315,52 @@ function renderRecords() {
     placement: elements.recordsPlacementFilter?.value || "",
   });
 
+  const pageSize = state.recordsPageSize;
+  const total = filtered.length;
+  const totalPages = pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / pageSize));
+  state.recordsPage = Math.min(Math.max(1, state.recordsPage), totalPages);
+
+  const start = pageSize === "all" ? 0 : (state.recordsPage - 1) * pageSize;
+  const end = pageSize === "all" ? filtered.length : start + pageSize;
+  const visibleRecords = filtered.slice(start, end);
+  updateRecordsPagination(total, totalPages, start, visibleRecords.length);
+
   if (!filtered.length) {
     elements.recordsBody.innerHTML = `<tr><td class="empty-row" colspan="10">登録データがありません</td></tr>`;
     return;
   }
 
-  elements.recordsBody.innerHTML = filtered
+  elements.recordsBody.innerHTML = visibleRecords
     .map((record) => {
       const medals = getRecordMedals(record);
       const resultClass = medals > 0 ? "win-text" : "lose-text";
       const oldPlacement = !isCurrentPlacementRecord(record);
-      const machineOptions = state.candidates.machines
-        .map(
-          (machine) => `
-            <option value="${escapeHtml(machine)}" ${machine === record.machine ? "selected" : ""}>
-              ${escapeHtml(machine)}
-            </option>
-          `
-        )
-        .join("");
       return `
-        <tr>
+        <tr data-record-row-id="${record.id}">
           <td>
             <span class="placement-badge ${oldPlacement ? "old-placement-badge" : "current-placement-badge"}">${oldPlacement ? "旧配置" : "現在配置"}</span>
           </td>
           <td>
-            <input
-              class="record-date-input"
-              type="date"
-              data-record-field-id="${record.id}"
-              data-record-field="date"
-              value="${escapeHtml(record.date)}"
-            />
+            <input class="record-date-input" type="date" data-record-field-id="${record.id}" data-record-field="date" value="${escapeHtml(record.date)}" />
           </td>
           <td>
-            <input
-              class="record-shop-input"
-              type="text"
-              list="shopCandidates"
-              data-record-field-id="${record.id}"
-              data-record-field="shop"
-              value="${escapeHtml(record.shop)}"
-              placeholder="店舗名"
-            />
+            <input class="record-shop-input" type="text" list="shopCandidates" data-record-field-id="${record.id}" data-record-field="shop" value="${escapeHtml(record.shop)}" placeholder="店舗名" />
           </td>
           <td>
-            <input
-              class="record-tag-input"
-              type="text"
-              list="tagCandidates"
-              data-record-field-id="${record.id}"
-              data-record-field="tag"
-              value="${escapeHtml(record.tag)}"
-              placeholder="特日タグ"
-            />
+            <input class="record-tag-input" type="text" list="tagCandidates" data-record-field-id="${record.id}" data-record-field="tag" value="${escapeHtml(record.tag)}" placeholder="特日タグ" />
           </td>
           <td>
-            <input
-              class="record-machine-input"
-              type="text"
-              list="machineCandidates"
-              data-record-field-id="${record.id}"
-              data-record-field="machine"
-              value="${escapeHtml(record.machine)}"
-              placeholder="機種名"
-            />
-            <select class="record-machine-select" data-record-machine-select-id="${record.id}">
-              <option value="">保存済み機種から選択</option>
-              ${machineOptions}
-            </select>
+            <input class="record-machine-input" type="text" list="machineCandidates" data-record-field-id="${record.id}" data-record-field="machine" value="${escapeHtml(record.machine)}" placeholder="機種名" />
           </td>
           <td class="number-cell">
-            <input
-              class="record-number-input"
-              type="text"
-              inputmode="numeric"
-              data-record-field-id="${record.id}"
-              data-record-field="number"
-              value="${escapeHtml(record.number)}"
-              placeholder="台番号"
-            />
+            <input class="record-number-input" type="text" inputmode="numeric" data-record-field-id="${record.id}" data-record-field="number" value="${escapeHtml(record.number)}" placeholder="台番号" />
           </td>
           <td class="number-cell medals-cell ${resultClass}">
-            <input
-              class="record-medals-input"
-              type="text"
-              data-record-field-id="${record.id}"
-              data-record-field="medals"
-              value="${escapeHtml(record.medals)}"
-              placeholder="例：-500"
-            />
+            <input class="record-medals-input" type="text" data-record-field-id="${record.id}" data-record-field="medals" value="${escapeHtml(record.medals)}" placeholder="例：-500" />
           </td>
-          <td class="${resultClass}">${medals > 0 ? "勝ち" : "負け"}</td>
+          <td class="record-result-cell ${resultClass}">${medals > 0 ? "勝ち" : "負け"}</td>
           <td>
-            <input
-              class="record-memo-input"
-              type="text"
-              data-record-field-id="${record.id}"
-              data-record-field="memo"
-              value="${escapeHtml(record.memo || "")}"
-              placeholder="メモ"
-            />
+            <input class="record-memo-input" type="text" data-record-field-id="${record.id}" data-record-field="memo" value="${escapeHtml(record.memo || "")}" placeholder="メモ" />
           </td>
           <td>
             <div class="row-actions">
@@ -2374,35 +2372,64 @@ function renderRecords() {
       `;
     })
     .join("");
+}
 
-  elements.recordsBody.querySelectorAll("[data-record-field-id][data-record-field]").forEach((input) => {
-    input.addEventListener("change", () => {
-      updateRecordFieldInline(input.dataset.recordFieldId, input.dataset.recordField, input.value);
-    });
-  });
-  elements.recordsBody.querySelectorAll("[data-record-machine-select-id]").forEach((select) => {
-    select.addEventListener("change", () => {
-      const id = select.dataset.recordMachineSelectId;
-      const value = select.value;
-      if (!value) return;
-      const input = select.closest("tr")?.querySelector('[data-record-field="machine"]');
-      if (input) input.value = value;
-      updateRecordFieldInline(id, "machine", value);
-    });
-  });
-  elements.recordsBody.querySelectorAll("[data-bulk-tag-from]").forEach((button) => {
-    button.addEventListener("click", () => applyTagToSameDateMachine(button.dataset.bulkTagFrom));
-  });
-  elements.recordsBody.querySelectorAll("[data-delete]").forEach((button) => {
-    button.addEventListener("click", () => {
-      if (confirm("この登録を削除しますか？")) deleteRecord(button.dataset.delete);
-    });
-  });
+function updateRecordsPagination(total, totalPages, start, visibleCount) {
+  if (elements.recordsPageSizeSelect) elements.recordsPageSizeSelect.value = String(state.recordsPageSize);
+  if (elements.recordsPageInfo) elements.recordsPageInfo.textContent = `${state.recordsPage} / ${totalPages}ページ（全${yen.format(total)}件）`;
+  if (elements.recordsPrevPageButton) elements.recordsPrevPageButton.disabled = state.recordsPage <= 1;
+  if (elements.recordsNextPageButton) elements.recordsNextPageButton.disabled = state.recordsPage >= totalPages;
+  if (!elements.recordsCountInfo) return;
+  if (!total) {
+    elements.recordsCountInfo.textContent = "全0件中 0件を表示";
+    return;
+  }
+  elements.recordsCountInfo.textContent = `全${yen.format(total)}件中 ${yen.format(start + 1)}〜${yen.format(start + visibleCount)}件を表示`;
+}
+
+function handleRecordsBodyChange(event) {
+  const input = event.target.closest("[data-record-field-id][data-record-field]");
+  if (!input) return;
+  updateRecordFieldInline(input.dataset.recordFieldId, input.dataset.recordField, input.value);
+}
+
+function handleRecordsBodyClick(event) {
+  const deleteButton = event.target.closest("[data-delete]");
+  if (deleteButton) {
+    if (confirm("この登録を削除しますか？")) deleteRecord(deleteButton.dataset.delete);
+    return;
+  }
+
+  const bulkTagButton = event.target.closest("[data-bulk-tag-from]");
+  if (bulkTagButton) applyTagToSameDateMachine(bulkTagButton.dataset.bulkTagFrom);
+}
+
+function refreshAfterInlineRecordUpdate({ candidateChanged = false, rerenderRecords = false } = {}) {
+  if (candidateChanged) renderCandidateControls();
+  if (state.activeView === "summary") renderSummary();
+  if (state.activeView === "recommend") renderRecommendations();
+  if (rerenderRecords) renderRecords();
+}
+
+function updateRecordResultCells(id, medals) {
+  const row = elements.recordsBody.querySelector(`[data-record-row-id="${CSS.escape(id)}"]`);
+  if (!row) return;
+  const resultClass = medals > 0 ? "win-text" : "lose-text";
+  const medalsCell = row.querySelector(".medals-cell");
+  const resultCell = row.querySelector(".record-result-cell");
+  medalsCell?.classList.remove("win-text", "lose-text");
+  resultCell?.classList.remove("win-text", "lose-text");
+  medalsCell?.classList.add(resultClass);
+  resultCell?.classList.add(resultClass);
+  if (resultCell) resultCell.textContent = medals > 0 ? "勝ち" : "負け";
 }
 
 function updateRecordFieldInline(id, field, value) {
   const record = state.records.find((item) => item.id === id);
   if (!record) return;
+
+  let candidateChanged = false;
+  let updatedMedals = null;
 
   if (field === "date") {
     record.date = value;
@@ -2416,12 +2443,12 @@ function updateRecordFieldInline(id, field, value) {
       return;
     }
     record.shop = shop;
-    addCandidate("shops", shop, false);
+    candidateChanged = addCandidate("shops", shop, false) || candidateChanged;
   }
 
   if (field === "tag") {
     record.tag = normalizeTag(value);
-    addCandidate("tags", record.tag, false);
+    candidateChanged = addCandidate("tags", record.tag, false) || candidateChanged;
   }
 
   if (field === "machine") {
@@ -2432,7 +2459,7 @@ function updateRecordFieldInline(id, field, value) {
       return;
     }
     record.machine = machine;
-    addCandidate("machines", machine, false);
+    candidateChanged = addCandidate("machines", machine, false) || candidateChanged;
   }
 
   if (field === "number") {
@@ -2448,6 +2475,7 @@ function updateRecordFieldInline(id, field, value) {
     }
     record.medals = medals;
     record.result = medals > 0 ? "勝ち" : "負け";
+    updatedMedals = medals;
   }
 
   if (field === "memo") {
@@ -2457,11 +2485,12 @@ function updateRecordFieldInline(id, field, value) {
   record.updatedAt = new Date().toISOString();
 
   saveRecords();
-  saveCandidates();
-  renderCandidateControls();
-  renderSummary();
-  renderRecommendations();
-  renderRecords();
+  if (candidateChanged) saveCandidates();
+  if (updatedMedals !== null) updateRecordResultCells(id, updatedMedals);
+  refreshAfterInlineRecordUpdate({
+    candidateChanged,
+    rerenderRecords: field === "date",
+  });
 
   setStatus("一覧の修正を保存しました");
 }
